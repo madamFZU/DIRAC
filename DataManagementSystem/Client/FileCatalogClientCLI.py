@@ -18,6 +18,12 @@ from DIRAC.DataManagementSystem.Client.DirectoryListing import DirectoryListing
 from DIRAC.DataManagementSystem.Client.MetaQuery import MetaQuery, FILE_STANDARD_METAKEYS
 from DIRAC.DataManagementSystem.Client.CmdDirCompletion.AbstractFileSystem import DFCFileSystem, UnixLikeFileSystem
 from DIRAC.DataManagementSystem.Client.CmdDirCompletion.DirectoryCompletion import DirectoryCompletion
+from DIRAC.RequestManagementSystem.Client.Request import Request
+from DIRAC.RequestManagementSystem.Client.Operation import Operation
+from DIRAC.RequestManagementSystem.Client.File import File
+from DIRAC.RequestManagementSystem.Client.ReqClient import ReqClient
+
+from pprint import pprint
 
 class FileCatalogClientCLI(cmd.Cmd):
   """ usage: FileCatalogClientCLI.py xmlrpc-url.
@@ -1940,16 +1946,21 @@ File Catalog Client $Revision: 1.17 $Date:
     
         Usage:
           
-          dataset add <dataset_name> <meta_query>          - add a new dataset definition
-          dataset annotate <dataset_name> <annotation>     - add annotation to a dataset
+          dataset add [-f] <dataset_name> <meta_query>     - add a new dataset definition
+          dataset anotate [-r] <dataset_name> <anotation>  - add annotation to a dataset
           dataset show [-l] [<dataset_name>]               - show existing datasets
-          dataset status <dataset_name>                    - display the dataset status
+          dataset status <dataset_name> [<dataset_name>]*  - display the dataset status
           dataset files <dataset_name>                     - show dataset files     
           dataset rm <dataset_name>                        - remove dataset
-          dataset check <dataset_name>                     - check if the dataset parameters are still valid     
-          dataset update <dataset_name>                    - update the dataset parameters
+          dataset check <dataset_name> [<dataset_name>]*   - check if the dataset parameters are still valid
+          dataset update <dataset_name> [<dataset_name>]*  - update the dataset parameters
           dataset freeze <dataset_name>                    - fix the current contents of the dataset     
           dataset release <dataset_name>                   - release the dynamic dataset
+          dataset overlap <dataset_name1> <dataset_name2>  - check if two datasets have the same files
+          dataset download <dataset_name>  [-d <target_dir>] [<percentage]
+                                                           - download dataset
+          dataset locate <dataset_name>                    - show dataset distribution over SEs
+          dataset replicate <dataset_name> <SE>            - init a bulk replication of a frozen dataset files
     """
     argss = args.split()
     if (len(argss)==0):
@@ -1976,91 +1987,239 @@ File Catalog Client $Revision: 1.17 $Date:
     elif command == "release":
       self.dataset_release( argss )      
     elif command == "status":
-      self.dataset_status( argss )        
+      self.dataset_status( argss )
+    elif command == "download":
+      self.dataset_download( argss )
+    elif command == "locate":
+      self.dataset_locate( argss )
+    elif command == "overlap":
+      self.dataset_overlap( argss )
+    elif command == "replicate":
+      self.dataset_replicate( argss )
 
   def dataset_add( self, argss ):
     """ Add a new dataset
     """
-    datasetName = argss[0]
-    metaSelections = ' '.join( argss[1:] )
-    result = self.__createQuery( metaSelections )
-    if not result['OK']:
-      print "Illegal metaQuery:", metaSelections
+    usage_add = "dataset add [-f] <dataset_name> <meta_query>"
+    start = 0
+    frozen = False
+    if argss[0] == '-f':
+      frozen = True
+      start = 1
+    datasetName = self.__dsCkeckArgs( argss[start:], usage_add )
+    if not datasetName:
       return
-    metaDict = result['Value']
-    datasetName = self.getPath( datasetName )
+
+    # parsing query
+    metaSelections = ' '.join( argss[start + 1:] )
+    metaDict = self.__createQuery( metaSelections )
+    # pprint ( metaDict )
+    if not metaDict:
+      print usage_add
+      print "ERROR: No or invalid meta query specified:"
+      print "The meta query parts should be formated: <MetaField><Operator><Value>"
+      print "Spaces should be only between parts"
+      return
     
-    result = self.fc.addDataset( datasetName, metaDict )
+    result = self.fc.addDataset( datasetName, metaDict, frozen )
     if not result['OK']:
       print "ERROR: failed to add dataset:", result['Message']
     else:
-      print "Successfully added dataset", datasetName  
+      print "Successfully added dataset", datasetName
 
   def dataset_annotate( self, argss ):
-    """ Add a new dataset
+    """ Add dataset annotation
     """
-    datasetName = argss[0]
+    rem = False
+    usage = "Usage: dataset anotate [-r] <dataset_name> <anotation>"
+    if ( argss[0] == '-r' ):
+      rem = True
+      datasetName = self.__dsCkeckArgs( argss[1:], usage )
+    else:
+      datasetName = self.__dsCkeckArgs( argss, usage )
+    if not datasetName:
+      return
+
+    if rem:
+      result = self.fc.rmDatasetAnnotation( datasetName )
+      if result['OK']:
+        print "Successfully removed annotation from", datasetName
+      else:
+        print "ERROR: failed to remove annotation:", result['Message']
+      return
+
     annotation = ' '.join( argss[1:] )
-    datasetName = self.getPath( datasetName )
+    if not annotation:
+      print usage
+      return
     
     result = self.fc.addDatasetAnnotation( {datasetName: annotation} )
-    if not result['OK']:
-      print "ERROR: failed to add annotation:", result['Message']
+    if result['OK']:
+      print "Successfully added annotation to", datasetName
     else:
-      print "Successfully added annotation to", datasetName  
+      print "ERROR: failed to add annotation:", result['Message']
 
   def dataset_status( self, argss ):
     """ Display the dataset status
     """
-    datasetName = argss[0]
-    result = self.fc.getDatasetParameters( datasetName )
+    usage = "Usage: dataset status <dataset_name> [<dataset_name>]* "
+    datasetNames = self.__dsCkeckArgsForArray( argss, usage )
+    if not datasetNames:
+      return  # exiting after printing usage in function
+
+    result = self.fc.getDatasetStatuses( datasetNames )
     if not result['OK']:
       print "ERROR: failed to get status of dataset:", result['Message']
     else:
-      parDict = result['Value']
-      for par,value in parDict.items():
-        print par.rjust(20),':',value  
+      self.__printDsPropertiesTable( result['Value'] )
+#      fields = ["Key", "Value"]
+#      for name, dicti in result['Value'].items():
+#        print '\n' + name + ":"
+#        print '=' * ( len( name ) + 1 )
+#        records = {}
+#        records = [[k, str( v )] for k, v in dicti.items()]
+#        printTable( fields, records )
+
+#      parDict = result['Value']
+#      for par,value in parDict.items():
+#        print par.rjust(20),':',value
 
   def dataset_rm( self, argss ):
     """ Remove the given dataset
     """
-    datasetName = argss[0]
+    usage = "Usage: dataset rm <dataset_name>"
+    datasetName = self.__dsCkeckArgs( argss, usage )
+    if not datasetName:
+      return
+
     result = self.fc.removeDataset( datasetName )
     if not result['OK']:
       print "ERROR: failed to remove dataset:", result['Message']
     else:
       print "Successfully removed dataset", datasetName  
+      if result['Failed']:
+        print "Some fileIDs couldn't be resolved:"
+        # pprint( result['Failed'] )
+      if result['LFNs']:
+        print "The deleted dataset was frozen."
+        print "Folowing files shall be deleted: "
+        print '\n'.join( result['LFNs'] )
+        ans = raw_input( "Do you agree to deleting these files? [y/n]" )
+        if ans not in ['y', 'Y', 'yes', 'YES', 'Yes']:
+          print "Files will not be deleted."  # Warning?
+          return
+
+        print "Initializing delete request"
+        # making delete request
+        req = Request()
+        req.RequestName = "deletion of dataset %s files" % datasetName
+        top = 0
+        op = Operation()
+        op.Type = 'RemoveFile'
+        for lfn in result['LFNs']:
+
+          if top > 90:
+            req.addOperation( op )
+            op = Operation()
+            op.Type = 'RemoveFile'
+            top = 0
+            
+          opFile = File()
+          opFile.LFN = lfn
+          op.addFile( opFile )
+          top += 1
+
+        pprint( req )
+        # result = gRequestValid.validate( req )
+        # if not result['OK']:
+        #  print "ERROR:" , result['Message']
+
+        # print result  # debug
+
+        # TODO: uncomment inserting request to DB
+        rc = ReqClient()
+        # execute request: rc.putRequest(req)
+
+
+
+
 
   def dataset_check( self, argss ):
     """ check if the dataset parameters are still valid
     """
-    datasetName = argss[0]
-    result = self.fc.checkDataset( datasetName )
+    usage = "Usage: dataset check <dataset_name> [<dataset_name>]* "
+    datasetNames = self.__dsCkeckArgsForArray( argss, usage )
+    if not datasetNames:
+      return  # exiting after printing usage in function
+
+    result = self.fc.checkDataset( datasetNames )
     if not result['OK']:
-      print "ERROR: failed to check dataset:", result['Message']
+      print "ERROR: failed to check datasets:", result['Message']
+    elif not result['Value']:
+      print "OK: The dataset(s) are up to date"    
     else:
-      changeDict = result['Value']
-      if not changeDict:
-        print "Dataset is not changed"
-      else:
-        print "Dataset changed:"
-        for par in changeDict:
-          print "   ",par,': ',changeDict[par][0],'->',changeDict[par][1]
+      dsProps = result['Value']
+      labels = ['Key', 'Old Value', 'New Value']
+      for ds in dsProps.keys():
+        none = True
+        records = []
+        for err in dsProps[ds]['errCode']:
+          if none:
+            self.__printDsName( ds )
+            none = False
+          records.append( [err, str( dsProps[ds][err] ), str( dsProps[ds]['new'][err] )] )
+        if not none:
+          printTable( labels, records )
+    return  # old implementation is next
+
+
+#    datasetName = argss[0]
+#    result = self.fc.checkDataset( datasetName )
+#    if not result['OK']:
+#      print "ERROR: failed to check dataset:", result['Message']
+#    else:
+#      changeDict = result['Value']
+#      if not changeDict:
+#        print "Dataset is not changed"
+#      else:
+#        print "Dataset changed:"
+#        for par in changeDict:
+#          print "   ",par,': ',changeDict[par][0],'->',changeDict[par][1]
           
   def dataset_update( self, argss ):
     """ Update the given dataset parameters
     """
-    datasetName = argss[0]
-    result = self.fc.updateDataset( datasetName )
+    usage = "Usage: dataset update <dataset_name> [<dataset_name>]* "
+    
+    datasetNames = self.__dsCkeckArgsForArray( argss, usage )
+    if not datasetNames:
+      return  # exiting after printing usage in function
+
+    result = self.fc.updateDataset(datasetNames)
+    
     if not result['OK']:
-      print "ERROR: failed to update dataset:", result['Message']
+      print result
+    elif not result['Value']:
+      print "All datasets were already up to date"
     else:
-      print "Successfully updated dataset", datasetName            
+      print "Dataset(s) updated"
+    return #old implementation is next
+
+#    datasetName = argss[0]
+#    result = self.fc.updateDataset( datasetName )
+#    if not result['OK']:
+#      print "ERROR: failed to update dataset:", result['Message']
+#    else:
+#      print "Successfully updated dataset", datasetName
 
   def dataset_freeze( self, argss ):
     """ Freeze the given dataset
     """
-    datasetName = argss[0]
+    usage = "Usage: dataset freeze <dataset_name>"
+    datasetName = self.__dsCkeckArgs( argss, usage )
+    if not datasetName:
+      return
+
     result = self.fc.freezeDataset( datasetName )
     if not result['OK']:
       print "ERROR: failed to freeze dataset:", result['Message']
@@ -2070,7 +2229,11 @@ File Catalog Client $Revision: 1.17 $Date:
   def dataset_release( self, argss ):
     """ Release the given dataset
     """
-    datasetName = argss[0]
+    usage = "Usage: dataset release <dataset_name>"
+    datasetName = self.__dsCkeckArgs( argss, usage )
+    if not datasetName:
+      return
+
     result = self.fc.releaseDataset( datasetName )
     if not result['OK']:
       print "ERROR: failed to release dataset:", result['Message']
@@ -2080,10 +2243,15 @@ File Catalog Client $Revision: 1.17 $Date:
   def dataset_files( self, argss ):
     """ Get the given dataset files
     """
-    datasetName = argss[0]
+    usage = "Usage: dataset files <dataset_name>"
+    datasetName = self.__dsCkeckArgs( argss, usage )
+    if not datasetName:
+      return
     result = self.fc.getDatasetFiles( datasetName )
     if not result['OK']:
       print "ERROR: failed to get files for dataset:", result['Message']
+    elif not result['Value'] or result['Value'] == None:
+      print "Dataset is empty"
     else:
       lfnList = result['Value']
       for lfn in lfnList:
@@ -2093,38 +2261,315 @@ File Catalog Client $Revision: 1.17 $Date:
     """ Show existing requested datasets
     """
     long_ = False
-    if '-l' in argss:
-      long_ = True
-      del argss[argss.index('-l')]
+    every = False
+    largs = len( argss )
     datasetName = ''
-    if len( argss ) > 0:
-      datasetName = argss[0]
-
-    result = self.fc.getDatasets( datasetName )
+    
+    if largs == 0:
+      every = True
+    elif largs == 1:
+      if argss[0] == '-l':
+        every = True
+        long_ = True
+      else:
+        datasetName = argss[0]
+    elif largs == 2:
+      long_ = True
+      datasetName = argss[1]
+    # too much params
+    else: 
+      print "Usage: dataset show [-l] [<dataset_name>]"
+      return
+    
+    if datasetName:
+      datasetName = self.getPath( datasetName )
+    
+    result = self.fc.showDatasets( datasetName, long_, every )
     if not result['OK']:
       print "ERROR: failed to get datasets"
       return
 
     datasetDict = result['Value']
     if not long_:
-      for dName in datasetDict.keys():
-        print dName
+      for dName in datasetDict:
+        print dName.replace( "//", "/" )
     else:
-      fields = ['Key','Value']
-      datasets = datasetDict.keys()
-      dsAnnotations = {}
-      resultAnno = self.fc.getDatasetAnnotation( datasets )
-      if resultAnno['OK']:
-        dsAnnotations = resultAnno['Value']['Successful']
-      for dName in datasets:
-        records = []
-        print '\n'+dName+":"
-        print '='*(len(dName)+1)
-        for key,value in datasetDict[dName].items():
-          records.append( [key,str( value )] )
-        if dName in dsAnnotations:
-          records.append( [ 'Annotation',dsAnnotations[dName] ] )  
-        printTable( fields, records )  
+      self.__printDsPropertiesTable( datasetDict, True )
+#      fields = ['Key','Value']
+#      wanted = ['Status', 'MetaQuery', 'NumberOfFiles', 'Path']
+#      datasets = datasetDict.keys()
+#      dsAnnotations = {}
+#      resultAnno = self.fc.getDatasetAnnotation( datasets )
+#      if resultAnno['OK']:
+#        dsAnnotations = resultAnno['Value']['Successful']
+#      for dName in datasets:
+#        records = []
+#        print '\n'+dName+":"
+#        print '='*(len(dName)+1)
+#        for key,value in datasetDict[dName].items():
+#          if key in wanted:
+#            records.insert( 0, [key, str( value )] )
+#          else:
+#            records.append( [key, str( value )] )
+# #        if dName in dsAnnotations:
+# #          records.append( [ 'Annotation',dsAnnotations[dName] ] )
+#        printTable( fields, records )
+
+  def dataset_locate(self, argss):
+    usage = "Usage: dataset locate <dataset_name>"
+    datasetName = self.__dsCkeckArgs( argss, usage )
+    if not datasetName:
+      return
+    result = self.fc.getDatasetLocation( datasetName )
+    if not result['OK']:
+      print result['Message']
+      return
+
+    # pprint( result )
+
+    dsSize = result['Value']['totalSize']
+    repDict = result['Value']['replicas']
+    sizeDict = result['Value']['fileSizes']
+    location = {}
+
+    # transform the replica dictionary in a se dictionary
+    # creating SE dictionary
+#    for se in result['Value']['SEs']:
+#      location[se] = {}
+#      location[se]['files'] = []
+#      location[se]['size'] = 0
+
+    # populationg SE dictionary
+    for rep in repDict.keys():
+      for se in repDict[rep].keys():
+        if se not in location.keys():
+          location[se] = {}
+          location[se]['files'] = []
+          location[se]['size'] = 0
+
+        location[se]['files'].append( rep )
+        location[se]['size'] += sizeDict[rep]
+
+    # creating a pretty printable table
+    values = []
+
+    for se in location.keys():
+      perc = int( float( location[se]['size'] ) / ( float( dsSize ) / 100 ) )
+      line = [se, str( len( location[se]['files'] ) ), str( location[se]['size'] ) + "(" + str( perc ) + "%)"]
+      values.append( line )
+
+    fields = ['SE', 'Files', 'Size']
+    printTable( fields, values )
+
+  
+  def dataset_overlap(self, argss):
+    usage = "Usage: dataset overlap <dataset_name1> <dataset_name2>"
+    datasetNames = self.__dsCkeckArgsForArray( argss, usage )
+    if len( datasetNames ) != 2:
+      print usage
+      return
+
+    result = self.fc.checkOverlapingDatasets( datasetNames )
+    if not result['OK']:
+      print result['Message']
+    elif not result['Value']:
+      print "Datasets don't overlap"
+    else:
+      lfns = result['Value']
+      print '\n'.join( lfns )
+
+
+  def dataset_replicate( self, argss ):
+    usage = "Usage: dataset replicate <dataset_name> <SE>"
+    if len( argss ) > 2:
+      print usage
+      return
+    datasetName = self.__dsCkeckArgs( argss[:-1], usage )
+    if not datasetName:
+      return
+    se = argss[-1]
+
+    # get dataset files
+    result = self.fc.getDatasetFilesWithChecksums( datasetName )
+    if not result['OK']:
+      print "ERROR: failed to replicate dataset:", result['Message']
+    elif not result['Value'] or result['Value'] == None:
+      print "Dataset is empty"
+    else:  # we have a frozen non-empty dataset
+
+      lfnDict = result['Value']
+
+      print "initializing bulk replication"
+      req = Request()
+      req.RequestName = "replication of dataset %s files" % datasetName
+      top = 0
+      op = Operation()
+      op.Type = 'ReplicateAndRegister'
+      op.TargetSE = [ se ]
+      for lfn, dicti in lfnDict.items():
+        if top > 90:
+          req.addOperation( op )
+          op = Operation()
+          op.Type = 'ReplicateAndRegister'
+          op.TargetSE = [ se ]
+          top = 0
+
+        opFile = File()
+        opFile.LFN = lfn
+        opFile.Checksum = dicti['Checksum']
+        opFile.ChecksumType = dicti['ChecksumType']
+        op.addFile( opFile )
+        top += 1
+
+      print "Debug output:"
+      for opFile in op:
+        print opFile.LFN, opFile.Status, opFile.Checksum, opFile.ChecksumType
+      # result = gRequestValid.validate( req )
+      # if not result['OK']:
+      #  print "ERROR:" , result['Message']
+
+      # TODO: uncomment inserting request to DB
+      rc = ReqClient()
+      # execute request:
+      # rc.putRequest(req)
+
+    return
+
+  def dataset_download(self, argss):
+    usage = "Usage: dataset download <dataset_name>  [-d <target_dir>] [<percentage>]"
+    datasetName = self.__dsCkeckArgs( argss, usage )
+    if not datasetName:
+      return
+    
+    dsBaseName = os.path.basename( datasetName )
+
+    perc = 100
+    lcwd = os.getcwd()
+    # if dir given, change the working dir
+    if len( argss ) > 1 and '-d' == argss[1]:
+      target_dir = argss[2]
+      try:
+        os.chdir(target_dir)
+      except:
+        print "Directory %s doesn't exist, creating" % target_dir
+        os.makedirs(target_dir)
+        os.chdir(target_dir)
+    # parse percentage
+    elif len( argss ) == 2:
+      perc = int( argss[1] )
+    elif len( argss ) == 4:
+      perc = int( argss[3] )
+
+    # make dataset directory
+    if os.path.exists( dsBaseName ):
+      ans = raw_input( "The directory %s/%s exists, do you want to replace it [y/n]" % ( os.getcwd(), dsBaseName ) )
+      if ans not in ['y', 'Y', 'yes', 'YES', 'Yes']:
+        print "user abort"
+        return
+      from shutil import rmtree
+      rmtree( os.getcwd() + '/' + dsBaseName )
+
+    os.makedirs( dsBaseName )
+    os.chdir( dsBaseName )
+
+    # get dataset files with sizes
+    result = self.fc.getDatasetFiles( datasetName )
+    if not result['OK']:
+      print "Unable to retrieve dataset files: %s" % result['Message']
+    if not result['Value']:
+      print "Dataset is empty"
+    # pprint( result )
+    
+    # determine what files to download
+    lfns = []
+    if perc < 100:
+      target = perc * result['TotalSize'] / 100
+      # what a nice N-P problem we got here :)
+
+      # sorting the lfn list by file size
+      files = sorted( [( value, key ) for ( key, value ) in result['FileSizes'].items()] , reverse = True )
+
+      testLast = result['TotalSize']
+      curSize = 0
+      lfns = []
+      # iterating through the sorted list
+      for size, lfn in files:
+        # just a test
+        if size > testLast:
+          print "Error in sorting files by size"
+        # if the file can be added, add it
+        if curSize + size < target:
+          lfns.append( lfn )
+        testLast = size
+      print "perc not 100"
+    else:
+      lfns = result['Value']
+    
+    # download the files
+    failed = {}
+    successful = []
+    dirac = Dirac()
+    for lfn in lfns:
+      result = dirac.getFile( lfn )
+      if not result['OK']:
+        mes = eval( result['Message'] )
+        failed[lfn] = mes['Failed'][lfn]
+      else:
+        successful.append( lfn )
+
+    if successful:
+      print "Successfuly downloaded files: %s" % ', '.join( successful )
+    if failed:
+      print "Faild to download files:"
+      printTable( ['lfn', 'error'], [[k, v] for k, v in failed.items()] )
+     
+    if lcwd:
+      os.chdir( lcwd )
+    return
+
+  def __printDsPropertiesTable( self, datasetDict, byID = False ):
+    """
+      Prints a pretty table of dictionary[dName][propDict]
+    """
+    fields = ['Key', 'Value']
+    wanted = ['Status', 'MetaQuery', 'NumberOfFiles', 'Path']
+    datasets = datasetDict.keys()
+    for dName in datasets:
+      records = []
+      if byID:
+        name = datasetDict[dName]['DatasetName']
+      else:
+        name = dName
+      self.__printDsName( name )
+      for key, value in datasetDict[dName].items():
+        if key in wanted:
+          records.insert( 0, [key, str( value )] )
+        else:
+          records.append( [key, str( value )] )
+      printTable( fields, records )
+
+  def __printDsName( self, dsName ):
+    print '\n' + dsName.replace( "//", "/" ) + ":"
+    print '=' * ( len( dsName ) + 1 )
+
+  def __dsCkeckArgs( self, argss, usage ):
+    """
+      Ckecks args with one argument commands. If OK,
+    """
+    if len( argss ) < 1:
+      print usage
+      return ''
+
+    # return datasetName
+    return  self.getPath( argss[0] )
+
+
+  def __dsCkeckArgsForArray( self, argss, usage ):
+    if len( argss ) < 1:
+      print usage
+      return ''
+
+    return [self.getPath( dsName ) for dsName in argss]
 
   def do_stats( self, args ):
     """ Get the catalog statistics

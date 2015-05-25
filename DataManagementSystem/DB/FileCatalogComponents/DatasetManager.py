@@ -13,6 +13,7 @@ try:
 except ImportError:
   import md5
 from types import StringTypes, ListType, DictType
+from pprint import pprint
 import os
 from DIRAC import S_OK, S_ERROR, gLogger
 from DIRAC.Core.Utilities.List import stringListToString
@@ -51,33 +52,28 @@ class DatasetManager:
                                        "PrimaryKey": "DatasetID",
                                      }
 
+  # list for full query
+  _parameterList = ['DatasetID', 'MetaQuery', 'DirID', 'TotalSize', 'NumberOfFiles',
+                     'UID', 'GID', 'Status', 'CreationDate', 'ModificationDate',
+                     'DatasetHash', 'Mode']
+  # list of query fields returning int
+  _ints = ['DatasetID', 'DirID', 'TotalSize', 'NumberOfFiles', 'UID', 'GID', 'Status']
+
   def __init__( self, database = None ):
     self.db = None
-    if database is not None:
+    if database:
       self.setDatabase( database )
 
   def setDatabase( self, database ):
     self.db = database
-    
-    # Have to check the existing table should be dropped when 
-    # existing tables will not be recreated
-    result = self.db._query("SHOW TABLES")
-    if not result['OK']:
-      return result
-    tableList = [ x[0] for x in result['Value'] ]
-    tablesToCreate = {}
-    for table in self._tables:
-      if not table in tableList:
-        tablesToCreate[table] = self._tables[table]
-
-    result = self.db._createTables( tablesToCreate )
+    result = self.db._createTables( self._tables )
     if not result['OK']:
       gLogger.error( "Failed to create tables", str( self._tables.keys() ) )
     elif result['Value']:
       gLogger.info( "Tables created: %s" % ','.join( result['Value'] ) )  
     return result
 
-  def _getConnection( self, connection=False ):
+  def __getConnection( self, connection=False ):
     if connection:
       return connection
     res = self.db._getConnection()
@@ -85,8 +81,9 @@ class DatasetManager:
       return res['Value']
     return connection
 
-  def addDataset( self, datasetName, metaQuery, credDict ):
+  def addDataset( self, datasetName, metaQuery, frozen, credDict ):  # ok
 
+    # get credentials
     result = self.db.ugManager.getUserAndGroupID( credDict )
     if not result['OK']:
       return result
@@ -95,11 +92,17 @@ class DatasetManager:
     result = self.__getMetaQueryParameters( metaQuery, credDict )
     if not result['OK']:
       return result
-    totalSize = result['Value']['TotalSize']
-    datasetHash = result['Value']['DatasetHash']
-    numberOfFiles = result['Value']['NumberOfFiles']
+    empty = result['Value'] == None
+    if empty and frozen:
+      return S_ERROR( "Cannot add an empty frozen dataset" )
 
-    result = self.db.fileManager._getStatusInt( 'Dynamic' )
+    totalSize = result['Value']['TotalSize'] if not empty else 0
+    datasetHash = result['Value']['DatasetHash'] if not empty else ""
+    numberOfFiles = result['Value']['NumberOfFiles'] if not empty else 0
+    fileIDs = result['Value']['LFNIDList'] if not empty else []
+
+    status = 'Frozen' if frozen else 'Dynamic'
+    result = self.db.fileManager._getStatusInt( status )
     if not result['OK']:
       return result
     intStatus = result['Value']
@@ -107,7 +110,10 @@ class DatasetManager:
     dsDir = os.path.dirname( datasetName )
     dsName = os.path.basename( datasetName )
     if not dsDir:
+      # this should never occur, since the path is controlled on the client
       return S_ERROR( 'Dataset name should be specified with full path' )
+
+    # getting the dirID, or creating dir if no such is present in the dirTree
     result = self.db.dtree.existsDir( dsDir )
     if not result['OK']:
       return result
@@ -115,6 +121,7 @@ class DatasetManager:
       dirID = result['Value']['DirID']
     else:  
       result = self.db.dtree.makeDirectories( dsDir )
+      gLogger.info( "Creating directories for dataset %s" % datasetName )
       if not result['OK']:
         return result
       dirID = result['Value']
@@ -140,372 +147,799 @@ class DatasetManager:
       else:
         return result
     datasetID = result['lastRowId']
+
+    # if frozen, add values to the DatasetFiles table
+    if frozen:
+      result = self.db._update( "DELETE FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % datasetID )
+      if not result['OK']:
+        return result
+
+      vals = ','.join( ['(%s,%d)' % ( datasetID, fileID ) for fileID in fileIDs] )
+      req = 'INSERT INTO FC_MetaDatasetFiles (DatasetID,FileID) VALUES %s ' % vals
+      # gLogger.debug( req )
+      result = self.db._update( req )
+      if not result['OK']:
+        return result
     return S_OK( datasetID )
   
-  def _getDatasetDirectories( self, datasets ):
-    dirDict = {}
-    for path in datasets:
-      dsDir = os.path.dirname( path )
-      dsFile = os.path.basename( path )
-      dirDict.setdefault( dsDir, [] )
-      dirDict[dsDir].append( dsFile )
-    return dirDict
-  
-  def _findDatasets( self, datasets, connection=False ):
-     
-    connection = self._getConnection( connection ) 
-    fullNames = [ name for name in datasets if name.startswith('/') ]
-    shortNames = [ name for name in datasets if not name.startswith('/') ]
-    
-    resultDict = { "Successful": {}, "Failed": {} }
-    if fullNames:
-      result = self.__findFullPathDatasets( fullNames, connection )
-      if not result['OK']:
-        return result
-      resultDict = result['Value']
-      
-    if shortNames:
-      result = self.__findNoPathDatasets( shortNames, connection ) 
-      if not result['OK']:
-        return result
-      resultDict['Successful'].update( result['Value']['Successful'] )
-      resultDict['Failed'].update( result['Value']['Failed'] )
-  
-    return S_OK( resultDict )
-  
-  def __findFullPathDatasets( self, datasets, connection ):
-        
-    dirDict = self._getDatasetDirectories( datasets )
-    failed = {}
-    successful = {}
-    result = self.db.dtree.findDirs( dirDict.keys() )
-    if not result['OK']:
-      return result
-    directoryIDs = result['Value']
+  def addDatasetAnnotation( self, annotDict, credDict ):  # ok
 
-    directoryPaths = {}
-    for dirPath in dirDict:
-      if not dirPath in directoryIDs:
-        for dsName in dirDict[dirPath]:
-          dname = '%s/%s' % (dirPath,dsName)
-          dname = dname.replace('//','/')
-          failed[dname] = 'No such dataset or directory'
-      else:
-        directoryPaths[directoryIDs[dirPath]] = dirPath    
+    dsIDs = []
+    numDs = len( annotDict.keys() )
+    only = numDs == 1
 
-    wheres = []
-    for dirPath in directoryIDs:
-      dsNames = dirDict[dirPath]
-      dirID = directoryIDs[dirPath]
-      wheres.append( "( DirID=%d AND DatasetName IN (%s) )" % ( dirID, stringListToString( dsNames ) ) )
-
-    req = "SELECT DatasetName,DirID,DatasetID FROM FC_MetaDatasets WHERE %s" % " OR ".join( wheres )
-    result = self.db._query(req,connection)
-    if not result['OK']:
-      return result
-    for dsName, dirID, dsID in result['Value']:
-      dname = '%s/%s' % ( directoryPaths[dirID], dsName )
-      dname = dname.replace('//','/')
-      successful[dname] = { "DirID": dirID, "DatasetID": dsID } 
-  
-    for dataset in datasets:
-      if not dataset in successful:
-        failed[dataset] = "No such dataset"
-
-    return S_OK({"Successful":successful,"Failed":failed})
-  
-  def __findNoPathDatasets( self, nodirDatasets, connection ):
-
-    failed = {}
-    successful = {}
-    dsIDs = {}
-    req = "SELECT COUNT(DatasetName),DatasetName,DatasetID FROM FC_MetaDatasets WHERE DatasetName in "
-    req += "( %s ) GROUP BY DatasetName" % stringListToString( nodirDatasets )
-    result = self.db._query( req, connection )
-    if not result['OK']:
-      return result
-    for dsCount, dsName, dsID in result['Value']:
-      if dsCount > 1:
-        failed[dsName] = "Ambiguous dataset name"
-      else:  
-        dsIDs[dsName] = str( dsID )
-        
-    if dsIDs:
-      req = "SELECT DatasetName,DatasetID,DirID FROM FC_MetaDatasets WHERE DatasetID in (%s)" % ','.join( dsIDs.values() ) 
-      result = self.db._query( req, connection )
-      if not result['OK']:
-        return result 
-      for dsName, dsID, dirID in result['Value']:
-        successful[dsName] = { "DirID": dirID, "DatasetID": dsID }   
-       
-    for name in nodirDatasets:
-      if name not in failed and name not in successful:
-        failed[name] = "Dataset not found"     
-        
-    return S_OK({"Successful":successful,"Failed":failed})    
-  
-  def addDatasetAnnotation( self, datasets, credDict ):
-    """ Add annotation to the given dataset
-    """
-    connection = self._getConnection()
-    successful = {}
-    result = self._findDatasets( datasets.keys(), connection )
-    if not result['OK']:
-      return result
-    failed = result['Value']['Failed']
-    datasetDict = result['Value']['Successful']
-    for dataset, annotation in datasets.items():
-      if dataset in datasetDict:
-        req = "REPLACE FC_DatasetAnnotations (Annotation,DatasetID) VALUE ('%s',%d)" % (annotation,datasetDict[dataset]['DatasetID'])
-        result = self.db._update( req, connection)
-        if not result['OK']:
-          failed[dataset] = "Failed to add annotation"
-        else:
-          successful[dataset] = True  
-      
-    return S_OK( {'Successful':successful, 'Failed':failed} )  
-  
-  def getDatasetAnnotation( self, datasets, credDict = {} ):
-    """ Get annotations for the given datasets
-    """
-    successful = {}
-    failed = {}
-    if datasets:
-      result = self._findDatasets( datasets )
-      if not result['OK']:
-        return result
-      dsDict = {}
-      for dataset in result['Value']['Successful']:
-        dsDict[result['Value']['Successful'][dataset]['DatasetID']] = dataset
-      for dataset in result['Value']['Failed']:
-        failed[dataset] = "Dataset not found"  
-      
-      idString = ','.join( [ str(x) for x in dsDict.keys() ] )
-      req = "SELECT DatasetID, Annotation FROM FC_DatasetAnnotations WHERE DatasetID in (%s)" % idString
+    if only:
+      result = self.__getDatasetID( annotDict.keys()[0] )
     else:
-      req = "SELECT DatasetID, Annotation FROM FC_DatasetAnnotations"  
-    result = self.db._query( req )
+      result = self.__getDatasetIDMult( annotDict.keys() )
+
     if not result['OK']:
       return result
+    if not result['Value']:
+      return S_ERROR( "Could not any find dataset(s)" )
     
-    for dsID, annotation in result['Value']:
-      successful[dsDict[dsID]] = annotation
-      
-    if datasets:  
-      for dataset in datasets:
-        if dataset not in successful and dataset not in failed:
-          successful[dataset] = '-'  
-      
-    return S_OK( {'Successful':successful, 'Failed':failed} )  
+    values = ""
+    if only:
+      dsIDs.append( str( result['Value']['ID'] ) )
+      values = '(%s,"%s")' % ( str( result['Value']['ID'] ), annotDict.values()[0] )
+    else:
+      dsIDtoNames = {v['ID']: k.replace( "//", "/" ) for k, v in result['Value'].iteritems()  }
+      dsIDs = [str( ID ) for ID in dsIDtoNames.keys()]
 
-  def __getMetaQueryParameters( self, metaQuery, credDict ):
-    """ Get parameters ( hash, total size, number of files ) for the given metaquery
-    """
-    findMetaQuery = dict( metaQuery )
+      values = ','.join( ['(%s,"%s")' % ( dsID, annotDict[dsIDtoNames[int( dsID )]] ) for dsID in dsIDs ] )
 
-    path = '/'
-    if "Path" in findMetaQuery:
-      path = findMetaQuery['Path']
-      findMetaQuery.pop( 'Path' )
-
-    result = self.db.fmeta.findFilesByMetadata( findMetaQuery, path, credDict, extra=True )
+    gLogger.info( "Annotating datasets with ID: ", str( dsIDs ) )
+    req = "REPLACE FC_DatasetAnnotations (DatasetID,Annotation) VALUE %s" % values
+    result = self.db._update( req )
+    
     if not result['OK']:
-      return S_ERROR( 'Failed to apply the metaQuery' )
-    if type( result['Value'] ) == ListType:
-      lfnList = result['Value']
-    elif type( result['Value'] ) == DictType:
-      # Process into the lfn list
-      lfnList = []
-      for dir_,fList in result['Value'].items():
-        for f in fList:
-          lfnList.append(dir_+'/'+f)
-    lfnIDDict = result.get( 'LFNIDDict', {} )
-    lfnIDList = result.get( 'LFNIDList', [] )
-    if not lfnIDList:
-      lfnIDList = lfnIDDict.keys()
-    lfnList.sort()
-    myMd5 = md5.md5()
-    myMd5.update( str( lfnList ) )
-    datasetHash = myMd5.hexdigest().upper()
-    numberOfFiles = len( lfnList )
-    result = self.db.fileManager.getFileSize( lfnList )
-    totalSize = 0
-    if result['OK']:
-      totalSize = result['TotalSize']
+      return result
+    elif result['Value'] < numDs:
+      return S_ERROR( "%d of %d datasets was not annotated" % ( numDs - result['Value'], numDs ) )
+    else:
+      return S_OK()
 
-    result = S_OK( { 'DatasetHash': datasetHash,
-                     'NumberOfFiles': numberOfFiles,
-                     'TotalSize': totalSize,
-                     'LFNList': lfnList,
-                     'LFNIDList': lfnIDList } )
+
+
+#    datasetID = result['Value']['ID']
+#
+#    connection = self.__getConnection()
+#    successful = {}
+#    result = self._findDatasets( datasets.keys(), connection )
+#    if not result['OK']:
+#      return result
+#    failed = result['Value']['Failed']
+#    datasetDict = result['Value']['Successful']
+#    if not datasetDict:
+#      result['OK'] = False
+#      result['Message'] = "No such datasets found: " + str( datasets.keys() )
+#      return  result
+#    for dataset, annotation in datasets.items():
+#      if dataset in datasetDict:
+#        req = "REPLACE FC_DatasetAnnotations (Annotation,DatasetID) VALUE ('%s',%d)" % (annotation,datasetDict[dataset]['DatasetID'])
+#        result = self.db._update( req, connection)
+#        if not result['OK']:
+#          failed[dataset] = "Failed to add annotation"
+#        else:
+#          successful[dataset] = True
+#
+#    return S_OK( {'Successful':successful, 'Failed':failed} )
+
+  def rmDatasetAnnotation( self, datasetName, credDict ):  # ok
+    result = self.__getDatasetID( datasetName )
+    if not result['OK']:
+      return result
+
+    gLogger.info( "Removing annotation from dataset:", datasetName )
+    req = "DELETE FROM FC_DatasetAnnotations WHERE DatasetID=%d" % result['Value']['ID']
+    result = self.db._update( req )
     return result
 
   def removeDataset( self, datasetName, credDict ):
     """ Remove existing dataset
     """
 
-    req = "SELECT DatasetID FROM FC_MetaDatasets WHERE DatasetName='%s'" % datasetName
-    result = self.db._query( req )
+    result = self.__getDatasetID( datasetName )
     if not result['OK']:
       return result
-    if not result['Value']:
-      # No requested dataset
-      return S_OK( 'Dataset %s does not exist' % datasetName  )
-    datasetID = result['Value'][0][0]
 
-    for table in ["FC_MetaDatasetFiles","FC_MetaDatasets","FC_DatasetAnnotations"]:
-      req = "DELETE FROM %s WHERE DatasetID=%s" % (table, datasetID)
-      result = self.db._update( req )
+    datasetID = result['Value']['ID']
 
+    result = self.db.fileManager._getIntStatus( result['Value']['Status'] )
+    if not result['OK']:
+      return result
+    status = result['Value']
+
+    fileIDs = []
+    if status in ['Frozen', 'Static']:
+      inside = "SELECT FileID FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % datasetID
+      req = "SELECT FileID FROM FC_MetaDatasetFiles WHERE FileID IN (%s) GROUP BY FileID HAVING Count(*)=1" % inside
+      result = self.db._query( req )
+      if not result['OK']:
+        gLogger.warn( 'Selecting files from a frozen dataset failed' )
+        return result
+      fileIDs = [int( fid[0] ) for fid in result['Value']]
+
+    req = ""
+    for table in ["FC_MetaDatasets", "FC_DatasetAnnotations", "FC_MetaDatasetFiles"]:
+      req += "DELETE FROM %s WHERE DatasetID=%s; " % ( table, datasetID )
+    gLogger.info( "Deleting dataset " + datasetName )
+    result = self.db._update( req )
+    res = self.db.fileManager._getFileLFNs( fileIDs )
+    # pprint( res )
+    if not res['OK']:
+      return res
+    result['LFNs'] = [ lfn for lfn in res['Value']['Successful'].values()]
+    result['Failed'] = res['Value']['Failed']
     return result
 
-  def checkDataset( self, datasetName, credDict ):
+  def checkDataset( self, dsNames, credDict ):  # ok
     """ Check that the dataset parameters correspond to the actual state
     """
-    req = "SELECT MetaQuery,DatasetHash,TotalSize,NumberOfFiles FROM FC_MetaDatasets"
-    req += " WHERE DatasetName='%s'" % datasetName
-    result = self.db._query( req )
+    dsIDs = []
+    only = len( dsNames ) == 1
+
+    if only:
+      result = self.__getDatasetID(dsNames[0])
+    else:
+      result = self.__getDatasetIDMult( dsNames )
+
     if not result['OK']:
       return result
     if not result['Value']:
-      return S_ERROR( 'Unknown MetaDataset %s' % datasetName )
+      return S_ERROR( "Could not any find dataset(s)" )
 
-    row = result['Value'][0]
-    metaQuery = eval( row[0] )
-    datasetHashOld = row[1]
-    totalSizeOld = int( row[2] )
-    numberOfFilesOld = int( row[3] )
-
-    result = self.__getMetaQueryParameters( metaQuery, credDict )
+    if only:
+      dsIDs.append( str( result['Value']['ID'] ) )
+    else:
+      dsIDtoNames = {v['ID']: k for k, v in result['Value'].iteritems()  }
+      dsIDs = [str( ID ) for ID in dsIDtoNames.keys()]
+      
+    props = ['DatasetID', 'MetaQuery', 'DatasetHash', 'TotalSize', 'NumberOfFiles']
+    req = "SELECT %s FROM FC_MetaDatasets" % ','.join( props )
+    req += " WHERE DatasetID IN (%s)" % ','.join( dsIDs )
+    result = self.db._query( req )
     if not result['OK']:
       return result
-    totalSize = result['Value']['TotalSize']
-    datasetHash = result['Value']['DatasetHash']
-    numberOfFiles = result['Value']['NumberOfFiles']
+    
 
-    changeDict = {}
-    if totalSize != totalSizeOld:
-      changeDict['TotalSize'] = ( totalSizeOld, totalSize )
-    if datasetHash != datasetHashOld:
-      changeDict['DatasetHash'] = ( datasetHashOld, datasetHash )
-    if numberOfFiles != numberOfFilesOld:
-      changeDict['NumberOfFiles'] = ( numberOfFilesOld, numberOfFiles )
+    # getting the result value in a dict:{'name':{dict}}
+    dsProps = {}
+    if only:
+      dsProps[dsNames[0]] = dict( zip( props, result['Value'][0] ) )
+    else:
+      for prop in result['Value']:
+        dsProps[dsIDtoNames[prop[0]]] = dict( zip( props, prop ) )
 
-    result = S_OK( changeDict )
-    return result
+    bad = False
+    metrics = ['TotalSize', 'DatasetHash', 'NumberOfFiles']
+    for ds in dsProps.keys():
+      res = self.__getMetaQueryParameters( eval( dsProps[ds]['MetaQuery'] ), credDict )
+      # pprint( res )
+      if not res['OK']:
+        gLogger.warn( "Failed to check dataset %s" % ds )
+        continue
+      elif not res['Value']:
+        res = dict( zip( metrics, [0 for m in metrics] ) )
+        # pprint( res )
+      else:
+        res = res['Value']
+      dsProps[ds]['errCode'] = []
 
-  def updateDataset( self, datasetName, credDict, changeDict=None ):
+      dsProps[ds]['new'] = res
+      for m in metrics:
+        if dsProps[ds][m] != res[m]:
+          bad = True
+          dsProps[ds]['errCode'].append( m )
+
+    if not bad:
+      return S_OK()
+    else:
+      return S_OK( dsProps )
+
+  def updateDataset( self, dsNames, credDict, changeDict = None ):  # ok
     """ Update the dataset parameters
     """
 
-    if changeDict is None:
-      result = self.checkDataset( datasetName, credDict )
-      if not result['OK']:
-        return result
-      if not result['Value']:
-        # The dataset is not changed
-        return S_OK()
-      else:
-        changeDict = result['Value']
+    result = self.checkDataset( dsNames, credDict )
+    if not result['OK'] or not result['Value']:
+      return result
+    dsDicts = result['Value']
+    reqs = []
+    for ds in dsDicts.keys():
+      if not dsDicts[ds]['errCode']:
+        continue
+      prefix = "UPDATE FC_MetaDatasets SET "
+      postfix = "ModificationDate=UTC_TIMESTAMP() WHERE DatasetID=%d;" % dsDicts[ds]['DatasetID']
+      req = ""
+      for err in dsDicts[ds]['errCode']:
+        req += " %s='%s', " % ( err, str( dsDicts[ds]['new'][err] ) )
+      reqs.append( prefix + req + postfix )
 
-    req = "UPDATE FC_MetaDatasets SET "
-    for field in changeDict:
-      req += "%s='%s', " % ( field, str( changeDict[field][1] ) )
-    req += "ModificationDate=UTC_TIMESTAMP() "
-    req += "WHERE DatasetName='%s'" % datasetName
-    result = self.db._update( req )
-    return result
+    return self.db._transaction( reqs )
 
-  def getDatasets( self, datasetName, credDict ):
+
+
+
+    # old implementation
+
+#    if changeDict is None:
+#      result = self.checkDataset( datasetName, credDict )
+#      if not result['OK']:
+#        return result
+#      if not result['Value']:
+#        # The dataset is not changed
+#        return S_OK()
+#      else:
+#        changeDict = result['Value']
+#
+#    req = "UPDATE FC_MetaDatasets SET "
+#    for field in changeDict:
+#      req += "%s='%s', " % ( field, str( changeDict[field] ) )
+#    req += "ModificationDate=UTC_TIMESTAMP() "
+#    req += "WHERE DatasetName='%s'" % datasetName
+#    result = self.db._update( req )
+#    return result
+
+  def showDatasets( self, datasetName, long_, every, credDict ):  # ok
     """ Get information about existing datasets
     """
-    dsName = os.path.basename(datasetName)
+    # called from dataset show
     
-    parameterList = ['DatasetID','MetaQuery','DirID','TotalSize','NumberOfFiles',
-                     'UID','GID','Status','CreationDate','ModificationDate',
-                     'DatasetHash','Mode','DatasetName']
-    parameterString = ','.join( parameterList )
+    # will be used for long_ false
+    parameterString = 'DatasetName, DirID'
 
-    req = "SELECT %s FROM FC_MetaDatasets" % parameterString
-    if type( datasetName ) in StringTypes:
-      dsName = os.path.basename(datasetName)
+    if long_:
+      parameterString = ','.join( self._parameterList )
+      if every:
+        parameterString += ",DatasetName"
+
+    postfix = ''
+    if not every:
+      dsName = os.path.basename( datasetName )
       if '*' in dsName:
         dName = dsName.replace( '*', '%' )
-        req += " WHERE DatasetName LIKE '%s'" % dName
-      elif dsName:
-        req += " WHERE DatasetName='%s'" % dsName
-    elif type( datasetName ) == ListType:
-      dsNames = [ os.path.basename(d) for d in datasetName ]
-      datasetString = stringListToString( dsNames )
-      req += " WHERE DatasetName in (%s)" % datasetString
+        postfix = " WHERE DatasetName LIKE '%s'" % dName
+      else:
+        result = self.__getDatasetID( datasetName )
+        if not result['OK']:
+          return result
+        dsID = result['Value']['ID']
+        postfix = ' WHERE DatasetID=%d' % dsID
 
+    req = "SELECT %s FROM FC_MetaDatasets" % parameterString
+    req += postfix
     result = self.db._query( req )
     if not result['OK']:
       return result
 
-    resultDict = {}
-    for row in result['Value']:
-      dName = row[12]
-      resultDict[dName] = self.__getDatasetDict( row )
+    if long_:
+      resultDict = {}
+      if every:
+        dirs = {}
+        for row in result['Value']:
+          dName = row[0]
+          resultDict[dName] = self.__getDatasetDictAuto( row )
 
-    return S_OK( resultDict )
+          # getting path for dirID
+          dirID = resultDict[dName]['DirID']
+          resultDict[dName]['Path'] = self.__getDirName( dirs, dirID )
+          resultDict[dName]['DatasetName'] = row[-1]
 
-  def getDatasetsInDirectory( self, dirID, verbose = False, connection = False ):
+      else:  # only one
+        resultDict[os.path.basename( datasetName )] = self.__getDatasetDictAuto( result['Value'][0] )
+        resultDict[os.path.basename( datasetName )]['DatasetName'] = datasetName
+      return S_OK( resultDict )
+    else:  # not long
+      dirs = {}
+      resultField = []
+      for row in result['Value']:
+        path = self.__getDirName( dirs, row[1] )
+        resultField.append( path + '/' + row[0] )
+      return S_OK( resultField )
+
+  def __getDirName( self, dirDict, dirID ):  # ok
+    if dirID not in dirDict.keys():
+      result = self.db.dtree.getDirectoryPath( dirID )
+      if not result['OK']:
+        dirDict[dirID] = "ERROR: could not find dirPath"
+      else:
+        dirDict[dirID] = result['Value']
+    return dirDict[dirID]
+# # old implementation
+#    parameterList = ['DatasetID','MetaQuery','DirID','TotalSize','NumberOfFiles',
+#                     'UID','GID','Status','CreationDate','ModificationDate',
+#                     'DatasetHash','Mode','DatasetName']
+#    parameterString = ','.join( self._parameterList.append( 'DatasetName' ) )
+#
+#    req = "SELECT %s FROM FC_MetaDatasets" % parameterString
+#    if type( datasetName ) in StringTypes:
+#      dsName = os.path.basename(datasetName)
+#      if '*' in dsName:
+#        dName = dsName.replace( '*', '%' )
+#        req += " WHERE DatasetName LIKE '%s'" % dName
+#      elif dsName:
+#        req += " WHERE DatasetName='%s'" % dsName
+#    elif type( datasetName ) == ListType:
+#      dsNames = [ os.path.basename(d) for d in datasetName ]
+#      datasetString = stringListToString( dsNames )
+#      req += " WHERE DatasetName in (%s)" % datasetString
+#
+#    result = self.db._query( req )
+#    if not result['OK']:
+#      return result
+#
+#    resultDict = {}
+#    for row in result['Value']:
+#      dName = row[12]
+#      resultDict[dName] = self.__getDatasetDict( row )
+#
+#    return S_OK( resultDict )
+
+  def getDatasetsInDirectory( self, dirID, verbose = False, connection = False ):  # ok
     """ Get datasets in the given directory
     """
-    datasets = {}
-    parameterList = ['DatasetName','DatasetID','MetaQuery','DirID','TotalSize','NumberOfFiles',
-                     'UID','GID','Status','CreationDate','ModificationDate',
-                     'DatasetHash','Mode']
-    parameterString = ','.join( parameterList )
+    parameterString = ','.join( self._parameterList )
+    parameterString += ",DatasetName"
 
     req = "SELECT %s FROM FC_MetaDatasets WHERE DirID=%s" % ( parameterString, str( dirID) )
     result = self.db._query( req )
     if not result['OK']:
       return result
+
+    datasets = {}
     userDict = {}
     groupDict = {}
     for row in result['Value']:
-      dsName = row[0]
-      datasets[dsName] = {}
-      dsDict = {}
-      for i in range( 1, len( row ), 1 ):
-        dsDict[parameterList[i]] = row[i]
-        if parameterList[i] == 'UID':
-          uid = row[i]
-          if uid in userDict:
-            owner = userDict[uid]
-          else:  
-            owner = 'unknown'
-            result = self.db.ugManager.getUserName( uid )
-            if result['OK']:
-              owner = result['Value']
-            userDict[uid] = owner  
-          dsDict[dsName]['Owner'] = owner
-        if parameterList[i] == 'GID':
-          gid = row[i]
-          if gid in groupDict:
-            group = groupDict[gid]
-          else:  
-            group = 'unknown'
-            result = self.db.ugManager.getGroupName( gid )
-            if result['OK']:
-              group = result['Value']
-            groupDict[gid] = group  
-          dsDict[dsName]['OwnerGroup'] = group   
-      datasets[dsName]['Metadata'] = dsDict
+      dsDict = self.__getDatasetDictAuto( row, num = True )
 
-    if verbose and datasets:
-      result = self.getDatasetAnnotation( datasets.keys() )
-      if result['OK']:
-        for dataset in result['Value']['Successful']:
-          datasets[dataset]['Annotation'] = result['Value']['Successful'][dataset]
-        for dataset in result['Value']['Failed']:
-          datasets[dataset]['Annotation'] = result['Value']['Failed'][dataset]
+      # get user name
+      if 'UID' in dsDict.keys():
+        uid = dsDict['UID']
+        if uid in userDict:
+            owner = userDict[uid]
+        else:
+          owner = 'unknown'
+          result = self.db.ugManager.getUserName( uid )
+          if result['OK']:
+            owner = result['Value']
+          userDict[uid] = owner
+        dsDict['Owner'] = owner
+
+      # get group name
+      if 'GID' in dsDict.keys():
+        gid = dsDict['GID']
+        if gid in groupDict:
+            group = groupDict[gid]
+        else:
+          group = 'unknown'
+          result = self.db.ugManager.getGroupName( gid )
+          if result['OK']:
+            group = result['Value']
+          groupDict[gid] = group
+        dsDict['OwnerGroup'] = group
+
+      dsName = row[-1]
+      datasets[dsName] = {}
+      datasets[dsName]['dsDict'] = dsDict
 
     return S_OK( datasets )
 
-  def __getDatasetDict( self, row ):
+# # old implementation, can be deleted
+#    if verbose and datasets:
+#      result = self.getDatasetAnnotation( datasets.keys() )
+#      if result['OK']:
+#        for dataset in result['Value']['Successful']:
+#          datasets[dataset]['Annotation'] = result['Value']['Successful'][dataset]
+#        for dataset in result['Value']['Failed']:
+#          datasets[dataset]['Annotation'] = result['Value']['Failed'][dataset]
+#
+#    return S_OK( datasets )
+
+  def getDatasetParameters( self, datasetName, credDict ):  # ok
+    """ Get the currently stored dataset parameters
+    """
+
+    result = self.__getDatasetID( datasetName )
+    if not result['OK']:
+      return result
+    dsID = result['Value']['ID']
+
+    parameterString = 'd.' + ',d.'.join( self._parameterList )
+
+    fromT = "FC_MetaDatasets as d LEFT OUTER JOIN FC_DatasetAnnotations as a ON d.DatasetID=a.DatasetID"
+    req = "SELECT %s,a.Annotation FROM %s WHERE d.DatasetID=%d" % ( parameterString, fromT, dsID )
+    result = self.db._query( req )
+    if not result['OK']:
+      return result
+
+    row = result['Value'][0]
+
+    resultDict = self.__getDatasetDictAuto( row )
+    if row[-1]:
+      resultDict['Annotation'] = row[-1]
+
+    return S_OK( resultDict )
+
+  def getDatasetStatuses( self, datasetNames, credDict ):  # ok
+    """ Get status of the given dataset
+    """
+    if len( datasetNames ) == 1:
+      out = {}
+      out[ os.path.basename( datasetNames[0] ) ] = self.getDatasetParameters( datasetNames[0], credDict )['Value']
+      if not out[ os.path.basename( datasetNames[0] ) ]:
+        return S_ERROR( "Dataset not found" )
+      # else:
+      return S_OK( out )
+
+    result = self.__getDatasetIDMult( datasetNames )
+    if not result['OK']:
+      return result
+
+    dsIDtoNames = {v['ID']: k for k, v in result['Value'].iteritems()  }
+    dsIDs = [str( row[1]['ID'] )  for row in result['Value'].items()]
+    if not dsIDs:
+      return S_ERROR( "None of the datasets were found" )
+
+    parameterString = 'd.' + ',d.'.join( self._parameterList ) + ',a.Annotation'
+
+    fromT = "FC_MetaDatasets as d LEFT OUTER JOIN FC_DatasetAnnotations as a ON d.DatasetID=a.DatasetID"
+    req = "SELECT %s FROM %s WHERE d.DatasetID in (%s)" % ( parameterString, fromT, ','.join( dsIDs ) )
+    result = self.db._query( req )
+    if not result['OK']:
+      return result
+
+    out = {}
+    for row in result['Value']:
+      name = dsIDtoNames[row[0]]
+      out[name] = {}
+      out[name] = self.__getDatasetDictAuto( row )
+      if row[-1]:
+        out[name]['Annotation'] = row[-1]
+
+    return S_OK( out )
+
+  def getDatasetFiles( self, datasetName, credDict ):  # ok
+    """ Get dataset files
+    """
+    # get ID and (int)status
+    result = self.__getDatasetID( datasetName )
+    if not result['OK']:
+      return result
+    status = result['Value']['Status']
+    dsID = result['Value']['ID']
+    dsMeta = result['Value']['MetaQ']
+
+    # get status in string
+    result = self.db.fileManager._getIntStatus( status )
+    if not result['OK']:
+      return result
+    status = result['Value']
+
+    # get DS files
+    if status in ["Frozen","Static"]:
+      return self.__getFrozenDatasetFiles( dsID )
+    else:
+      return self.__getDynamicDatasetFiles( dsID, credDict, dsMeta )
+
+  def getDatasetFilesWithChecksums( self, datasetName, credDict ):
+    """ Similar to getDatasetFiles, but works only for frozen datasets and returns
+        checksums. Used for dataset replicate command
+    """
+    result = self.__getDatasetID( datasetName )
+    if not result['OK']:
+      return result
+    status = result['Value']['Status']
+    dsID = result['Value']['ID']
+
+    # get status in string
+    result = self.db.fileManager._getIntStatus( status )
+    if not result['OK']:
+      return result
+    status = result['Value']
+
+    if status in ["Frozen", "Static"]:
+      req = "SELECT D.FileID, FI.Checksum, FI.CheckSumType FROM FC_MetaDatasetFiles AS D "
+      req += "INNER JOIN FC_FileInfo AS FI ON D.FileID=FI.FileID "
+      # req += "INNER JOIN FC_Files AS F ON D.FileID=F.FileID "
+      req += "WHERE D.DatasetID=%d" % dsID
+      result = self.db._query( req )
+      if not result['OK']:
+        return result
+
+      # parsing results
+      query = {}
+      for fil in result['Value']:
+        query[fil[0]] = {}
+        query[fil[0]]['Checksum'] = fil[1]
+        query[fil[0]]['ChecksumType'] = fil[2]
+
+      # getting LFNs from fileIDs
+      result = self.db.fileManager._getFileLFNs( [f[0] for f in result['Value']] )
+      if not result['OK']:
+        return result
+
+      # parsing both query results
+      out = {}
+      for k, v in result['Value']['Successful'].items():
+        out[v] = query[k]
+
+      out = S_OK( out )
+      if result['Value']['Failed']:
+        out['Failed'] = result['Value']['Failed']
+      # TODO: FUNISH
+      return out
+
+
+    else:  # dynamic dataset
+      return S_ERROR( "Replication of dynamic datasets is yet to be implemented" )
+
+  def freezeDataset( self, datasetName, credDict ):  # ok
+    """ Freeze the contents of the dataset
+    """
+    # get ID and (int)status
+    result = self.__getDatasetID( datasetName )
+    if not result['OK']:
+      return result
+    status = result['Value']['Status']
+    dsID = result['Value']['ID']
+    dsMeta = result['Value']['MetaQ']
+
+    # get status in string
+    result = self.db.fileManager._getIntStatus( status )
+    if not result['OK']:
+      return result
+    status = result['Value']
+
+    if status in ["Frozen", "Static"]:
+      return S_OK()
+
+    # delete any remaining files (should not be necessary)
+    req = "DELETE FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % dsID
+    result = self.db._update( req )
+    if not result['OK']:
+      return result
+
+    result = self.__getDynamicDatasetFiles( dsID, credDict, dsMeta )
+    if not result['OK']:
+      return result
+    if not result['FileIDList']:
+      return S_ERROR( "Freezing a dataset with no files" )
+
+    # getting the string of new values, that will be inserted
+    valueString = ','.join( ['(%d,%d)' % ( dsID, fileID ) for fileID in result['FileIDList']] )
+
+    req = "INSERT INTO FC_MetaDatasetFiles (DatasetID,FileID) VALUES %s" % valueString
+    result = self.db._update( req )
+    if not result['OK']:
+      return result
+
+    result = self.__setDatasetStatus( dsID, 'Frozen' )
+    return result
+
+  def releaseDataset( self, datasetName, credDict ):  # ok
+    """ return the dataset to a dynamic state
+    """
+    # get ID and (int)status
+    result = self.__getDatasetID( datasetName )
+    if not result['OK']:
+      return result
+    status = result['Value']['Status']
+    dsID = result['Value']['ID']
+
+    # get status in string
+    result = self.db.fileManager._getIntStatus( status )
+    if not result['OK']:
+      return result
+    status = result['Value']
+
+    if status == "Dynamic":
+      return S_OK()
+
+    req = "DELETE FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % dsID
+    result = self.db._update( req )
+
+    result = self.__setDatasetStatus( dsID, 'Dynamic' )
+    return result
+
+  def downloadDataset( self, dsName, credDict ):
+
+    result = self.getDatasetFiles( dsName, credDict )
+    if not result['OK']:
+      return result
+
+    if not result['Value']:
+      return S_ERROR( "Unable to retrieve dataset files" )
+
+    result = self.db.fileManager.getFileSize( result['Value'] )
+    if not result['OK']:
+      return result
+    else:
+      return S_OK( result['Value']['Successful'] )
+
+    # sizeDict = result['Value']['Successful'] if result['Value']['Successful'] else {}
+
+  def getDatasetLocation( self, dsName, credDict ):
+
+    result = self.getDatasetFiles( dsName, credDict )
+    if not result['OK']:
+      return result
+    if not result['Value']:
+      return S_ERROR( "Dataset is empty" )
+    lfnList = result['Value']
+    fileSizes = result['FileSizes']
+    totalSize = result['TotalSize']
+
+    result = self.db.fileManager.getReplicas( lfnList, False, credDict )
+    if not result['OK']:
+      return result
+    if not result['Value']['Successful']:
+      return S_ERROR( "Could not retrieve any replicas" )
+
+    replicas = result['Value']['Successful']
+    return S_OK( {'replicas': replicas,
+                  'fileSizes' : fileSizes,
+                  'totalSize' :  totalSize,
+                  # 'SEs' : result['Value']['SEPrefixes'].keys()
+                  } )
+
+  def checkOverlapingDatasets( self, datasetNames, credDict ):
+
+      result = self.__getDatasetIDMult( datasetNames )
+      if not result['OK']:
+        return result
+      if not result['Value']:
+        return S_ERROR( "Problem resolving datasetID, please check dataset status" )
+      if len( result['Value'] ) != 2:
+        return S_ERROR( "Problem resolving datasetID, please check dataset status" )
+
+      dsDicts = result['Value']
+      # pprint( dsDicts )
+
+      # check if both statuses are the same
+      if dsDicts[datasetNames[0]]['Status'] == dsDicts[datasetNames[1]]['Status']:
+        result = self.db.fileManager._getIntStatus( dsDicts[datasetNames[0]]['Status'] )
+        if not result['OK']:
+          return result
+        status = result['Value']
+        if status in ['Frozen', 'Static']:
+          dsIDs = ", ".join( [str( i ) for i in [dsDicts[datasetNames[0]]['ID'], dsDicts[datasetNames[1]]['ID']]] )
+          req = "select FileID from FC_MetaDatasetFiles where DatasetID in (%s) " % dsIDs
+          req += "group by FileID having count(*)>1"
+          result = self.db._query( req )
+          if not result['OK']:
+            return result
+          if not result['Value']:
+            # datasets don't overlap
+            return S_OK()
+
+          fileIDs = [fID[0] for fID in result['Value']]
+
+        else:  # two dynamic datasets
+          combinedMeta = self.__compareMetaqueries(dsDicts[datasetNames[0]]['MetaQ'],dsDicts[datasetNames[1]]['MetaQ'])
+          # check, if there can be any same files in both datasets
+          if not combinedMeta:
+            return S_OK()
+
+          result = self.__getMetaQueryParameters( combinedMeta, credDict )
+          if not result['OK']:
+            return result
+
+          return S_OK( result['Value']['LFNList'] )
+
+      else:  # statuses are different
+        combinedMeta = [ 1 ]  # self.__compareMetaqueries( dsDicts[datasetNames[0]]['MetaQ'], dsDicts[datasetNames[1]]['MetaQ'] )
+        gLogger.error( "REMOVE DEVELOPMENT ASSIGNEMENT!" )
+        # check, if there can be any same files in both datasets
+        if not combinedMeta:
+          return S_OK()
+        # now we know there can be some files in the intersection, but are they in the frozen dataset?
+        # determine which one is the frozen
+        result = self.db.fileManager._getIntStatus( dsDicts[datasetNames[0]]['Status'] )
+        if not result['OK']:
+          return result
+        status = result['Value']
+        frozenIndex = 0 if status in ['Frozen', 'Static'] else 1
+        result = self.__getFrozenDatasetFiles( dsDicts[datasetNames[frozenIndex]]['ID'] )
+        if not result['OK']:
+          # maybe add some error message here?
+          return result
+        filesFrozen = result['Value']
+        # modulate the ++frozenIndex with two to get the other index (0 -> 1, 1 -> 0)
+        dynamicID = dsDicts[datasetNames[( frozenIndex + 1 ) % 2]]['ID']
+        dynamicMeta = dsDicts[datasetNames[( frozenIndex + 1 ) % 2]]['MetaQ']
+        result = self.__getDynamicDatasetFiles( dynamicID, credDict, dynamicMeta )
+        if not result['OK']:
+          return result
+        filesDynamic = result['Value']
+
+        # get intersection of sets and return
+        out = list( set( filesDynamic ).intersection( filesFrozen ) )
+        return S_OK( out )
+
+      result = self.db.fileManager._getFileLFNs( fileIDs )
+      if not result['OK']:
+        return result
+      lfnDict = result['Value']['Successful']
+      lfns = [ lfnDict[i] for i in lfnDict.keys() ]
+      return S_OK( lfns )
+
+  def __compareMetaqueries( self, meta1, meta2 ):
+    """ Gets two metaqueries and combines them so that files, that may belong to both datasets
+        have to be in the result of the combined metaquery
+    """
+    meta1 = eval(meta1)
+    meta2 = eval(meta2)
+    pprint( meta1 )
+    pprint( meta2 )
+    return []
+
+  def __setDatasetStatus( self, dsID, status ):
+    """ Set the given dataset status
+    """
+    result = self.db.fileManager._getStatusInt( status )
+    if not result['OK']:
+      return result
+    intStatus = result['Value']
+
+    req = "UPDATE FC_MetaDatasets SET Status=%d, ModificationDate=UTC_TIMESTAMP() " % intStatus
+    req += "WHERE DatasetID=%d" % dsID
+    result = self.db._update( req )
+    return result
+
+
+  def __getDynamicDatasetFiles( self, datasetID, credDict, MetaQ ):  # ok
+    """ Get dataset lfns from a dynamic meta query
+    """
+    # making dict from string
+    metaQuery = eval( MetaQ )
+    result = self.__getMetaQueryParameters( metaQuery, credDict )
+    if not result['OK']:
+      return result
+    if not result['Value']:
+      return S_OK()
+
+
+    lfnList = result['Value']['LFNList']
+    finalResult = S_OK(lfnList)
+    finalResult['FileIDList'] = result['Value']['LFNIDList']
+    finalResult['FileSizes'] = result['Value']['FileSizes']
+
+    # maybe change this
+    finalResult['TotalSize'] = result['Value']['TotalSize'] if 'TotalSize' in result['Value'] else 0
+    return finalResult
+
+  def __getFrozenDatasetFiles( self, datasetID ):  # ok
+    """
+      Get datasets file lfns from a frozen dataset
+      :param int datasetID id of the dataset in question
+      :return dictionary in Value is a lfnList, in FileIDDict dictionary of lfns indexed by fileIds
+    """
+
+    req = "SELECT FileID FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % datasetID
+    result = self.db._query( req )
+    if not result['OK']:
+      return result
+
+    fileIDList = [ row[0] for row in result['Value'] ]
+    if not fileIDList:
+      return S_ERROR( "frozen dataset has no files" )
+    result = self.db.fileManager._getFileLFNs( fileIDList )
+    if not result['OK']:
+      return result
+
+    lfnDict = result['Value']['Successful']
+    lfnList = [ lfnDict[i] for i in lfnDict.keys() ]
+    finalResult = S_OK( lfnList )
+    finalResult['FileIDDict'] = lfnDict
+
+    result = self.db.fileManager.getFileSize( lfnList )
+    finalResult['FileSizes'] = result['Value']['Successful'] if 'Successful' in result['Value'] else {}
+    finalResult['TotalSize'] = result['TotalSize'] if 'TotalSize' in result else 0
+
+    return finalResult
+
+  def __getDatasetDict( self, row ):  # depricated: __getDatasetDictAuto
 
     resultDict = {}
     resultDict['DatasetID'] = int( row[0] )
@@ -538,151 +972,192 @@ class DatasetManager:
 
     return resultDict
 
-  def getDatasetParameters( self, datasetName, credDict ):
-    """ Get the currently stored dataset parameters
+
+  def __getMetaQueryParameters( self, metaQuery, credDict ):  # OK-ish
+    """ Get parameters ( hash, total size, number of files ) for the given metaquery
     """
-    result = self._findDatasets( [datasetName] )
+    findMetaQuery = dict( metaQuery )
+
+    path = '/'
+    if "Path" in findMetaQuery:
+      path = findMetaQuery['Path']
+      findMetaQuery.pop( 'Path' )
+
+    result = self.db.fmeta.findFilesByMetadata( findMetaQuery, path, credDict, extra=True )
     if not result['OK']:
-      return result
-    if not result['Value']['Successful']:
-      return S_ERROR( result['Value']['Failed'][datasetName] )
-    dirID = result['Value']['Successful'][datasetName]['DirID']     
-    dsName = os.path.basename( datasetName )
-    
-    parameterList = ['DatasetID','MetaQuery','DirID','TotalSize','NumberOfFiles',
-                     'UID','GID','Status','CreationDate','ModificationDate','DatasetHash','Mode']
-    parameterString = ','.join( parameterList )
-
-    req = "SELECT %s FROM FC_MetaDatasets WHERE DatasetName='%s' AND DirID=%d" % ( parameterString, dsName, dirID )
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-
-    row = result['Value'][0]
-    resultDict = self.__getDatasetDict( row )
-
-    return S_OK( resultDict )
-
-  def setDatasetStatus( self, datasetName, status ):
-    """ Set the given dataset status
-    """
-    result = self.db.fileManager._getStatusInt( status )
-    if not result['OK']:
-      return result
-    intStatus = result['Value']
-    req = "UPDATE FC_MetaDatasets SET Status=%d, ModificationDate=UTC_TIMESTAMP() " % intStatus
-    req += "WHERE DatasetName='%s'" % datasetName
-    result = self.db._update( req )
-    return result
-
-  def getDatasetStatus( self, datasetName, credDict ):
-    """ Get status of the given dataset
-    """
-
-    result = self.getDatasetParameters( datasetName, credDict )
-    if not result['OK']:
-      return result
-    status = result['Value']['Status']
-    return S_OK( status )
-
-  def __getDynamicDatasetFiles( self, datasetID, credDict ):
-    """ Get dataset lfns from a dynamic meta query
-    """
-    req = "SELECT MetaQuery FROM FC_MetaDatasets WHERE DatasetID=%d" % datasetID
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
+      return S_ERROR( 'Failed to apply the metaQuery' )
     if not result['Value']:
-      return S_ERROR( 'Unknown MetaDataset ID %d' % datasetID )
+      return S_OK()
 
-    metaQuery = eval( result['Value'][0][0] )
-    result = self.__getMetaQueryParameters( metaQuery, credDict )
+    if type( result['Value'] ) == ListType:
+      lfnList = result['Value']
+    elif type( result['Value'] ) == DictType:
+      # Process into the lfn list
+      lfnList = []
+      for dir_,fList in result['Value'].items():
+        for f in fList:
+          lfnList.append(dir_+'/'+f)
+
+    lfnIDDict = result.get( 'LFNIDDict', {} )
+    lfnIDList = result.get( 'LFNIDList', [] )
+    if not lfnIDList:
+      lfnIDList = lfnIDDict.keys()
+    lfnList.sort()
+
+    myMd5 = md5.md5()
+    myMd5.update( str( lfnList ) )
+    datasetHash = myMd5.hexdigest().upper()
+
+    numberOfFiles = len( lfnList )
+
+    result = self.db.fileManager.getFileSize( lfnList )
+
+    totalSize = 0
+    if result['OK']:
+      totalSize = result['TotalSize']
+
+    sizeDict = result['Value']['Successful'] if result['Value']['Successful'] else {}
+
+    result = S_OK( { 'DatasetHash': datasetHash,
+                     'NumberOfFiles': numberOfFiles,
+                     'TotalSize': totalSize,
+                     'LFNList': lfnList,
+                     'LFNIDList': lfnIDList,
+                     'FileSizes': sizeDict } )
+    return result
+
+######################################################## MADAMs new code ##################################################################################
+
+
+  def __getDatasetID( self, datasetFullName ):
+    """
+        Get ID for datasets full path + name
+        :param str full path to dataset
+        :return dict with ID, status and MetaQ
+    """
+
+    if ( datasetFullName[0] != '/' ):
+      return S_ERROR( '__getDatasetID got not a full name!!' )
+
+    gLogger.info( "getting ID for dataset %s" % datasetFullName )
+
+    dsDir = os.path.dirname( datasetFullName )
+    dsName = os.path.basename( datasetFullName )
+
+    result = self.db.dtree.findDir( dsDir )
+    # check if the query executed
     if not result['OK']:
       return result
 
-    lfnList = result['Value']['LFNList']
-    finalResult = S_OK(lfnList)
-    finalResult['FileIDList'] = result['Value']['LFNIDList']
-    return finalResult
+    # check if there is a valid answer
+    if not result['Value']:
+      result['OK'] = False
+      result['Message'] = "No such directory found: " + dsDir
+      return result
 
-  def __getFrozenDatasetFiles( self, datasetID, credDict ):
-    """ Get dataset lfns from a frozen snapshot
-    """
+    dirID = int( result['Value'] )
+    req = "SELECT DatasetID,Status,MetaQuery FROM FC_MetaDatasets WHERE DirID=%d AND DatasetName='%s'" % ( dirID, dsName )
+    result = self.db._query( req )
 
-    req = "SELECT FileID FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % datasetID
+    # check if the query executed
+    if not result['OK']:
+      return result
+
+    # check if there is a valid answer
+    if not result['Value']:
+      result['OK'] = False
+      result['Message'] = "No dataset found on: " + dsDir + "/" + dsName
+      return result
+
+    # parsing query output
+    resultOut = {}
+    resultOut['Value'] = {}
+    resultOut['Value']['ID'] = int( result['Value'][0][0] )
+    resultOut['Value']['Status'] = int( result['Value'][0][1] )
+    resultOut['Value']['MetaQ'] = result['Value'][0][2]
+    resultOut['OK'] = True
+
+    return resultOut
+
+  def __getDatasetIDMult( self, dsNameList ):
+
+    dirs = [os.path.dirname( path ) for path in dsNameList]
+    result = self.db.dtree.findDirs( dirs )
+    if not result['OK']:
+      return result
+
+    if not result['Value']:
+      return S_ERROR( "Unable to find no dirs" )
+
+    # making a list of tuples (dirID, dsName)
+    dirAndIDs = result['Value']
+    dirAndNames = [( int( dirAndIDs[os.path.dirname( dsName )] ),
+                     os.path.basename( dsName ) ) for dsName in dsNameList]
+
+    dirIDs = ','.join( [str( ID[0] ) for ID in dirAndNames] )
+    names = "','".join( [ID[1] for ID in dirAndNames] )
+    dirAndNames = ','.join( ['(%s,"%s")' % ( item[0], item[1] ) for item in dirAndNames] )
+
+    inside = "SELECT DatasetID,Status,MetaQuery,DirID,DatasetName FROM FC_MetaDatasets WHERE DirID IN (%s) AND DatasetName IN ('%s')" % ( dirIDs, names )
+    req = "SELECT * FROM (%s) AS Inside WHERE (DirID,DatasetName) IN (%s)" % ( inside, dirAndNames )
     result = self.db._query( req )
     if not result['OK']:
       return result
 
-    fileIDList = [ row[0] for row in result['Value'] ]
-    result = self.db.fileManager._getFileLFNs( fileIDList )
-    if not result['OK']:
-      return result
+    gLogger.info( "Resolved ID for %d of %d datasets" % ( len( result['Value'] ), len( dsNameList ) ) )
 
-    lfnDict = result['Value']['Successful']
-    lfnList = [ lfnDict[i] for i in lfnDict.keys() ]
-    result = S_OK( lfnList )
-    result['FileIDList'] = lfnDict.keys()
-    return result
+    out = {}
+    IDtoDir = {v: k for k, v in dirAndIDs.iteritems()}
+    for row in result['Value']:
+      # getting back the full name
+      name = IDtoDir[row[3]] + "/" + row[4]
+      name = name.replace( "//", "/" )
+      out[name] = {}
+      out[name]['ID'] = int( row[0] )
+      out[name]['Status'] = int( row[1] )
+      out[name]['MetaQ'] = row[2]
 
-  def getDatasetFiles( self, datasetName, credDict ):
-    """ Get dataset files
+    return S_OK(out)
+
+
+
+  def __getDatasetDictAuto( self, row, num = False ):
     """
-    result = self.getDatasetParameters( datasetName, credDict )
-    if not result['OK']:
-      return result
-    status = result['Value']['Status']
-    datasetID = result['Value']['DatasetID']
-    if status in ["Frozen","Static"]:
-      return self.__getFrozenDatasetFiles( datasetID, credDict )
-    else:
-      return self.__getDynamicDatasetFiles( datasetID, credDict )
+      Get dictionary with dataset properties based on the query which selects the
+      parameters from self._parameterList
 
-  def freezeDataset( self, datasetName, credDict ):
-    """ Freeze the contents of the dataset
+      :param list one line of the query result
+      :param boolean True if you want to return only numerical GID, UID, status
+      :param boolean True if the query was also for annotations
     """
-    result = self.getDatasetParameters( datasetName, credDict )
-    if not result['OK']:
-      return result
-    status = result['Value']['Status']
-    if status == "Frozen":
-      return S_OK()
+    resultDict = {}
+    paramList = self._parameterList
 
-    datasetID = result['Value']['DatasetID']
-    req = "DELETE FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % datasetID
-    result = self.db._update( req )
+    # this could probably be done with some python magic, but this is probably easier to read
+    for attr in paramList:
+      resultDict[attr] = row[paramList.index( attr )]
+      if attr in self._ints:
+        resultDict[attr] = int( resultDict[attr] )
 
-    result = self.__getDynamicDatasetFiles( datasetID, credDict )
+    if not num:
+      # get owner name
+      result = self.db.ugManager.getUserName( resultDict['UID'] )
+      if result['OK']:
+        resultDict['Owner'] = result['Value']
+      else:
+        resultDict['Owner'] = 'Unknown'
 
-    if not result['OK']:
-      return result
-    fileIDList = result['FileIDList']
-    valueList = []
-    for fileID in fileIDList:
-      valueList.append( '(%d,%d)' % (datasetID,fileID) )
-    valueString = ','.join( valueList )
-    req = "INSERT INTO FC_MetaDatasetFiles (DatasetID,FileID) VALUES %s" % valueString
-    result = self.db._update( req )
-    if not result['OK']:
-      return result
+      # get group name
+      result = self.db.ugManager.getGroupName( resultDict['GID'] )
+      if result['OK']:
+        resultDict['OwnerGroup'] = result['Value']
+      else:
+        resultDict['OwnerGroup'] = 'Unknown'
 
-    result = self.setDatasetStatus( datasetName, 'Frozen' )
-    return result
+      result = self.db.fileManager._getIntStatus( resultDict['Status'] )
+      if result['OK']:
+        resultDict['Status'] = result['Value']
+      else:
+        resultDict['Status'] = 'Unknown'
 
-  def releaseDataset( self, datasetName, credDict ):
-    """ return the dataset to a dynamic state
-    """
-    result = self.getDatasetParameters( datasetName, credDict )
-    if not result['OK']:
-      return result
-    status = result['Value']['Status']
-    if status == "Dynamic":
-      return S_OK()
-
-    datasetID = result['Value']['DatasetID']
-    req = "DELETE FROM FC_MetaDatasetFiles WHERE DatasetID=%d" % datasetID
-    result = self.db._update( req )
-
-    result = self.setDatasetStatus( datasetName, 'Dynamic' )
-    return result
-
+    return resultDict
