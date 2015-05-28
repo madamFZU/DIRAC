@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """ File Catalog Client Command Line Interface. """
+#from yum.plugins import ArgsPluginConduit
 
 __RCSID__ = "$Id$"
 
@@ -2001,6 +2002,10 @@ File Catalog Client $Revision: 1.17 $Date:
     """ Add a new dataset
     """
     usage_add = "dataset add [-f] <dataset_name> <meta_query>"
+    if (len(argss) < 1):
+      print usage_add
+      return
+    
     start = 0
     frozen = False
     if argss[0] == '-f':
@@ -2032,6 +2037,10 @@ File Catalog Client $Revision: 1.17 $Date:
     """
     rem = False
     usage = "Usage: dataset anotate [-r] <dataset_name> <anotation>"
+    if (len(argss) < 1):
+      print usage
+      return
+    
     if ( argss[0] == '-r' ):
       rem = True
       datasetName = self.__dsCkeckArgs( argss[1:], usage )
@@ -2634,6 +2643,13 @@ File Catalog Client $Revision: 1.17 $Date:
     """ Exit the shell.
 
     usage: exit
+    """
+    sys.exit(0)
+    
+  def do_quit(self,args):
+    """ Exit the shell
+    
+    usage: quit
     """
     sys.exit(0)
 

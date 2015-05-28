@@ -167,6 +167,7 @@ class DatasetManager:
     dsIDs = []
     numDs = len( annotDict.keys() )
     only = numDs == 1
+    
 
     if only:
       result = self.__getDatasetID( annotDict.keys()[0] )
@@ -181,15 +182,16 @@ class DatasetManager:
     values = ""
     if only:
       dsIDs.append( str( result['Value']['ID'] ) )
-      values = '(%s,"%s")' % ( str( result['Value']['ID'] ), annotDict.values()[0] )
+      values = "(%s,'%s')" % ( str( result['Value']['ID'] ), annotDict.values()[0].replace("'","") )
     else:
-      dsIDtoNames = {v['ID']: k.replace( "//", "/" ) for k, v in result['Value'].iteritems()  }
+      dsIDtoNames = { v['ID']: k.replace( "//", "/" ) for k, v in result['Value'].iteritems() }
       dsIDs = [str( ID ) for ID in dsIDtoNames.keys()]
 
-      values = ','.join( ['(%s,"%s")' % ( dsID, annotDict[dsIDtoNames[int( dsID )]] ) for dsID in dsIDs ] )
+      values = ','.join( ["(%s,'%s')" % ( dsID, annotDict[dsIDtoNames[int( dsID )]].replace("'","") ) for dsID in dsIDs ] )
 
     gLogger.info( "Annotating datasets with ID: ", str( dsIDs ) )
     req = "REPLACE FC_DatasetAnnotations (DatasetID,Annotation) VALUE %s" % values
+    print req
     result = self.db._update( req )
     
     if not result['OK']:
