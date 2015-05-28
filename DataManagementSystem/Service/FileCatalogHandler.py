@@ -577,11 +577,11 @@ class FileCatalogHandler( RequestHandler ):
 #
 #  Dataset manipulation methods
 #
-  types_addDataset = [ StringTypes, DictType ]
-  def export_addDataset( self, datasetName, metaQuery ):
+  types_addDataset = [ StringTypes, DictType, BooleanType ]
+  def export_addDataset( self, datasetName, metaQuery, frozen ):
     """ Add a new dynamic dataset defined by its meta query
     """
-    return gFileCatalogDB.datasetManager.addDataset( datasetName, metaQuery, self.getRemoteCredentials() )
+    return gFileCatalogDB.datasetManager.addDataset( datasetName, metaQuery, frozen, self.getRemoteCredentials() )
   
   types_addDatasetAnnotation = [ DictType ]
   def export_addDatasetAnnotation( self, datasetDict ):
@@ -589,33 +589,46 @@ class FileCatalogHandler( RequestHandler ):
     """
     return gFileCatalogDB.datasetManager.addDatasetAnnotation( datasetDict, self.getRemoteCredentials() )
   
+  types_rmDatasetAnnotation = [ StringTypes ]
+  def export_rmDatasetAnnotation( self, datasetName ):
+    """ Remove annotation from an already created dataset
+    """
+    return gFileCatalogDB.datasetManager.rmDatasetAnnotation( datasetName, self.getRemoteCredentials() )
+
   types_removeDataset = [ StringTypes ]
   def export_removeDataset( self, datasetName ):
     """ Check the given dynamic dataset for changes since its definition
     """
     return gFileCatalogDB.datasetManager.removeDataset( datasetName, self.getRemoteCredentials() )
   
-  types_checkDataset = [ StringTypes ]
+  types_checkDataset = [ list( StringTypes ) + [ListType] ]
   def export_checkDataset( self, datasetName ):
     """ Check the given dynamic dataset for changes since its definition
     """
     return gFileCatalogDB.datasetManager.checkDataset( datasetName, self.getRemoteCredentials() )
   
-  types_updateDataset = [ StringTypes ]
+  types_updateDataset = [ list( StringTypes ) + [ListType] ]
   def export_updateDataset( self, datasetName ):
     """ Update the given dynamic dataset for changes since its definition
     """
     return gFileCatalogDB.datasetManager.updateDataset( datasetName, self.getRemoteCredentials() )
   
-  types_getDatasets = [ list( StringTypes ) + [ListType] ]
-  def export_getDatasets( self, datasetName ):
+  types_showDatasets = [ list( StringTypes ) + [ListType] , BooleanType , BooleanType]
+  def export_showDatasets( self, datasetName , long_, every ):
     """ Get parameters of the given dynamic dataset as they are stored in the database
     """
-    return gFileCatalogDB.datasetManager.getDatasets( datasetName, self.getRemoteCredentials() )
+    return gFileCatalogDB.datasetManager.showDatasets( datasetName, long_, every, self.getRemoteCredentials() )
   
+  types_getDatasetStatuses = [ list( StringTypes ) + [ListType] ]
+  def export_getDatasetStatuses( self, datasetName ):
+    """ Get parameters of the given datasets as they are cached in the database
+    """
+    return gFileCatalogDB.datasetManager.getDatasetStatuses( datasetName, self.getRemoteCredentials() )
+
+
   types_getDatasetParameters = [ StringTypes ]
   def export_getDatasetParameters( self, datasetName ):
-    """ Get parameters of the given dynamic dataset as they are stored in the database
+    """ Get parameters of the given dataset as they are stored in the database
     """
     return gFileCatalogDB.datasetManager.getDatasetParameters( datasetName, self.getRemoteCredentials() )
   
@@ -642,3 +655,21 @@ class FileCatalogHandler( RequestHandler ):
     """ Get lfns in the given dataset
     """
     return gFileCatalogDB.datasetManager.getDatasetFiles( datasetName, self.getRemoteCredentials() )
+
+  types_getDatasetFilesWithChecksums = [ StringTypes ]
+  def export_getDatasetFilesWithChecksums( self, datasetName ):
+    """ Get lfns and checksums in the given frozen dataset
+    """
+    return gFileCatalogDB.datasetManager.getDatasetFilesWithChecksums( datasetName, self.getRemoteCredentials() )
+
+  types_checkOverlapingDatasets = [list( StringTypes ) + [ListType]]
+  def export_checkOverlapingDatasets( self, datasetNames ):
+    """ Check if two datasets overlap
+    """
+    return gFileCatalogDB.datasetManager.checkOverlapingDatasets( datasetNames, self.getRemoteCredentials() )
+
+  types_getDatasetLocation = [StringTypes]
+  def export_getDatasetLocation( self, datasetName ):
+    """ Get replica location of datasets files
+    """
+    return gFileCatalogDB.datasetManager.getDatasetLocation( datasetName, self.getRemoteCredentials() )
