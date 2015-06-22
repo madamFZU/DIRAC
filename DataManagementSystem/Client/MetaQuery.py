@@ -2,8 +2,12 @@
 # File: MetaQuery.py
 # Author: A.T.
 # Date: 24.02.2015
+# Updated: VI.2015 by M.Adam
 # $HeadID$
 ########################################################################
+#from _ctypes import Array
+from __builtin__ import list, True
+from pprint import pprint
 
 """ Utilities for managing metadata based queries
 """
@@ -14,6 +18,7 @@ from DIRAC import S_OK, S_ERROR
 import DIRAC.Core.Utilities.Time as Time
 
 import json
+import copy
 
 FILE_STANDARD_METAKEYS = { 'SE': 'VARCHAR',
                            'CreationDate': 'DATETIME',
@@ -46,125 +51,164 @@ FILEINFO_TABLE_METAKEYS = { 'GUID': 'GUID',
                             'ModificationDate': 'ModificationDate',
                             'LastAccessDate': 'LastAccessDate' }
 
+LOGICAL_OPERATORS = ['AND', 'OR', 'NOT']
+
+OPOSITES =          {'=' : '!=',
+                     '!=': '=',
+                     '>' : '<=',
+                     '<=': '>',
+                     '<' : '>=',
+                     '>=': '<'}
+
+#TODO: probably change this
+DEFAULT_TYPE = "String"
 
 class MetaQuery( object ):
 
-  def __init__( self, queryDict = None, typeDict = None ):
+  def __init__( self, queryList = None, typeDict = None ):
 
-    self.__metaQueryDict = {}
-    if queryDict is not None:
-      self.__metaQueryDict = queryDict
+    self.__metaQueryList = []
+    if isinstance(queryList, list):
+      self.__metaQueryList = queryList
+    if isinstance(queryList, dict):
+      self.__metaQueryList = [queryList]
+      
     self.__metaTypeDict = {}
     if typeDict is not None:
       self.__metaTypeDict = typeDict
+      
+  def loadQueryList(self, queryList):
+    """ Load a new query list  without loosing the metaTypeDict
+    """
+    self.__metaQueryList = []
+    if isinstance(queryList, list):
+      self.__metaQueryList = queryList
+    if isinstance(queryList, dict):
+      self.__metaQueryList = [queryList]
+      
+  def parseQueryString(self, queryString):
+    """
+        Correctly parse the meta query string from user input
+        
+        :param queryString (string): user input to be parsed to become queryList
+        :returns array of parsed literals for the setMetaQuery function
+    """
+    operators = ['>','<','!','=',',',')','(']
+    tokens = []
+    nextStr = ""
+    
+    def __push(nextStr):
+      if not nextStr:
+        return ""
+      tokens.append(nextStr)
+      return ""
+    
+    op = False
+    quote = ""
+    
+    for i in range(0, len(queryString)):
+      ch = queryString[i]
+    
+      # first check for string parsing (parse values in quotes)
+      if ch == quote:
+        nextStr = __push(nextStr)
+        quote = ""
+      elif quote:
+        nextStr += (ch)
+      elif ch in ["'", '"']:
+        quote = ch
+      
+      # check for two char operators, all of which have the second char '='
+      elif op and ch == '=':
+        op = False
+        nextStr += ch
+        nextStr = __push(nextStr)
+    
+      # the operator is just single char
+      elif op:
+        op = False
+        nextStr = __push(nextStr)
+        if not ch.isspace():
+          nextStr += (ch)
+    
+      # char can be part of name or value, just push it
+      elif ch.isalpha() or ch.isdigit():
+        nextStr += (ch)
+    
+      # char can be part of an operator
+      elif ch in operators:
+        __push(nextStr)
+        nextStr = ch
+        op = True
+    
+      elif ch.isspace():
+        nextStr = __push(nextStr)
+    
+    __push(nextStr)
+    return tokens
 
   def setMetaQuery( self, queryList, metaTypeDict = None ):
-    """ Create the metadata query out of the command line arguments
+    """ 
+        Create the metadata query out of the command line arguments
+        
+        :param  queryList (list): list of correctly parsed meta query string
+        :param  metaTypeDict (dict): dictionary of the metadata to types (
     """
+    
     if metaTypeDict is not None:
       self.__metaTypeDict = metaTypeDict
-    metaDict = {}
-    contMode = False
-    value = ''
-    for arg in queryList:
-      if not contMode:
-        operation = ''
-        for op in ['>=','<=','>','<','!=','=']:
-          if op in arg:
-            operation = op
-            break
-        if not operation:
-          return S_ERROR( 'Illegal query element %s' % arg )
-
-        name,value = arg.split(operation)
-        if not name in self.__metaTypeDict:
-          return S_ERROR( "Metadata field %s not defined" % name )
-
-        mtype = self.__metaTypeDict[name]
-      else:
-        value += ' ' + arg
-        value = value.replace(contMode,'')
-        contMode = False
-
-      if value[0] in ['"', "'"] and value[-1] not in ['"', "'"]:
-        contMode = value[0]
-        continue
-
-      if ',' in value:
-        valueList = [ x.replace("'","").replace('"','') for x in value.split(',') ]
-        mvalue = valueList
-        if mtype[0:3].lower() == 'int':
-          mvalue = [ int(x) for x in valueList if not x in ['Missing','Any'] ]
-          mvalue += [ x for x in valueList if x in ['Missing','Any'] ]
-        if mtype[0:5].lower() == 'float':
-          mvalue = [ float(x) for x in valueList if not x in ['Missing','Any'] ]
-          mvalue += [ x for x in valueList if x in ['Missing','Any'] ]
-        if operation == "=":
-          operation = 'in'
-        if operation == "!=":
-          operation = 'nin'
-        mvalue = {operation:mvalue}
-      else:
-        mvalue = value.replace("'","").replace('"','')
-        if not value in ['Missing','Any']:
-          if mtype[0:3].lower() == 'int':
-            mvalue = int(value)
-          if mtype[0:5].lower() == 'float':
-            mvalue = float(value)
-        if operation != '=':
-          mvalue = {operation:mvalue}
-
-      if name in metaDict:
-        if isinstance( metaDict[name], dict ):
-          if isinstance( mvalue, dict ):
-            op,value = mvalue.items()[0]
-            if op in metaDict[name]:
-              if isinstance( metaDict[name][op], list ):
-                if isinstance( value, list ):
-                  metaDict[name][op] = list( set( metaDict[name][op] + value) )
-                else:
-                  metaDict[name][op] = list( set( metaDict[name][op].append( value ) ) )
-              else:
-                if isinstance( value, list ):
-                  metaDict[name][op] = list( set( [metaDict[name][op]] + value) )
-                else:
-                  metaDict[name][op] = list( set( [metaDict[name][op],value]) )
-            else:
-              metaDict[name].update(mvalue)
-          else:
-            if isinstance( mvalue, list ):
-              metaDict[name].update({'in':mvalue})
-            else:
-              metaDict[name].update({'=':mvalue})
-        elif isinstance( metaDict[name], list ):
-          if isinstance( mvalue, dict ):
-            metaDict[name] = {'in':metaDict[name]}
-            metaDict[name].update(mvalue)
-          elif isinstance( mvalue, list ):
-            metaDict[name] = list( set( (metaDict[name] + mvalue ) ) )
-          else:
-            metaDict[name] = list( set( metaDict[name].append( mvalue ) ) )
-        else:
-          if isinstance( mvalue, dict ):
-            metaDict[name] = {'=':metaDict[name]}
-            metaDict[name].update(mvalue)
-          elif isinstance( mvalue, list ):
-            metaDict[name] = list( set( [metaDict[name]] + mvalue ) )
-          else:
-            metaDict[name] = list( set( [metaDict[name],mvalue] ) )
-      else:
-        metaDict[name] = mvalue
-
-    self.__metaQueryDict = metaDict
-    return S_OK( metaDict )
+      
+    # making the old notation compatible
+    if 'AND' not in queryList and 'OR' not in queryList:
+      print 'NO AND'
+      opInds = []
+      ind = 0
+      for atom in queryList:
+        if atom in OPOSITES and ind > 2:
+          opInds.append(ind-1)
+        ind += 1
+      opInds.reverse()
+      for ind in opInds:
+        queryList.insert(ind, 'AND')
+      
+    # iterate through queryList input parameter and normalize the query into DNF
+    result = self.__convertToDNF(queryList)
+    if result['OK']:
+      self.__metaQueryList = result['Value']
+      return S_OK(self.__metaQueryList)
+    else: 
+      return S_ERROR(result['Message'])
+      
 
   def getMetaQuery( self ):
 
-    return self.__metaQueryDict
+    return self.__metaQueryList
 
   def getMetaQueryAsJson( self ):
 
-    return json.dumps( self.__metaQueryDict )
+    return json.dumps( self.__metaQueryList )
+  
+  def prettyPrintMetaQuery(self):
+    
+    orFirst = True
+    out = ""
+    for conj in self.__metaQueryList:
+      if not orFirst:
+        out += "OR "
+      else:
+        orFirst = False
+        
+      andFirst = True
+      for meta, mDict in conj.items():
+        if not andFirst:
+          out += "AND "
+        else:
+          andFirst = False
+        if isinstance(mDict, dict):
+          out += "%s %s %s " % (meta, str(mDict.keys()[0]), str(mDict[mDict.keys()[0]]))
+        else:
+          out += "%s = %s " % (meta, str(mDict))
+    print out
 
   def applyQuery( self, userMetaDict ):
     """  Return a list of tuples with tables and conditions to locate files for a given user Metadata
@@ -242,3 +286,356 @@ class MetaQuery( object ):
             return S_OK( False )
 
     return S_OK( True )
+
+  #============================================Private Methods===============================================
+  
+  def __convertToDNF(self,inputList,negGlobal=False):
+    out = []
+    termTmp = []
+    last = []
+    conjBuff = [] # buffer for storing intermediate conjunction 
+    neg = negGlobal
+  
+    i = 0
+    while i < len(inputList):
+      atom = inputList[i]
+      #print "atom %s " % atom
+      #pprint(conjBuff)
+      # cut out the correct bracket and send it down in recursion
+      if atom == '(':
+        iLocal = i +1
+        depth = 1
+        while depth > 0:
+          if iLocal == len(inputList):
+            return S_ERROR("Wrong bracketing")
+          if inputList[iLocal] == '(':
+            depth += 1
+          elif inputList[iLocal] == ')':
+            depth -= 1
+          iLocal += 1
+          
+        print "recursion IN"
+        result = self.__convertToDNF(inputList[(i+1):iLocal-1],neg)
+        if result['OK']:
+          print "recursion OK"
+          last = result['Value']
+        else:
+          print "recursion FAILED"
+          return result
+        i = iLocal - 1
+          
+      elif atom in LOGICAL_OPERATORS:
+        # if there is a term in the buffer, parse it
+        if termTmp:
+          newTerm = self.__parseTerm(termTmp)
+          if newTerm == None:
+            return S_ERROR('Wrong term syntax: ' + ' '.join(termTmp))
+          termTmp = []
+        
+        # the operators mean opposite things, when a bracket with a not in front is parsed
+        if negGlobal:
+          if atom == 'AND':
+            atom = 'OR'
+          elif atom == 'OR':
+            atom = 'AND'
+        
+        
+        if atom == 'AND':
+          try:
+            if last:
+              conjBuff = self.__addToConj(conjBuff, last)
+              last = []
+            elif newTerm:
+              conjBuff = self.__addToConj(conjBuff, [newTerm])
+              newTerm = []          
+            else:
+              return S_ERROR('logical AND in invalid position')
+          except RuntimeError as e:
+            return S_ERROR( 'Error occured: %s' % str(e) )
+        
+        else:
+          # TODO: check valid possitions
+          if atom == 'NOT':
+            neg = not neg # toggle the neg flag
+          
+          elif atom == 'OR':
+            # if the or comes after a plain term and there was not a conjunction      
+            if not conjBuff and newTerm:
+              out.append(newTerm)
+              newTerm = []
+            
+            # there was a conjunction
+            if conjBuff:
+              try:
+                if last:
+                  out.extend(self.__addToConj(conjBuff, last))
+                  last = []
+                           
+                elif newTerm:
+                  out.extend(self.__addToConj(conjBuff, [newTerm]))
+                  newTerm = []
+                  
+                conjBuff = []
+              except RuntimeError as e:
+                return S_ERROR( 'Error occured: %s' % str(e) )
+              
+      else:
+        if neg and atom in OPOSITES.keys():
+          termTmp.append(OPOSITES[atom])
+        else:
+          termTmp.append(atom)
+          
+      # incrementing the counter
+      i += 1
+    
+    # adding the last part
+    if termTmp:
+      newTerm = self.__parseTerm(termTmp)
+      if newTerm == None:
+        return S_ERROR('Wrong term syntax: ' + ' '.join(termTmp))
+    else:
+      newTerm = []
+    
+    if not conjBuff:
+      if newTerm:
+        out.append(newTerm)
+      elif last:
+        out.extend(last)
+      else:
+        return S_ERROR('no term in the end')
+    else:
+      try:
+        if last:
+          out.extend(self.__addToConj(conjBuff, last))
+        elif newTerm:
+          out.extend(self.__addToConj(conjBuff, [newTerm]))
+        else:
+          return S_ERROR('no term in the end')
+      except RuntimeError as e:
+        return S_ERROR( 'Error occured: %s' % str(e) )
+      
+    return S_OK(out)
+    
+  def __parseTerm(self,termList):
+    """ From list input parse term. If error in parsing, return None
+        The term is formated: metaName operator value [, value]*
+    """
+    # meta name is always the first
+    metaName = termList[0]
+    
+    # get operator and check its validity
+    operator = termList[1]
+    if operator not in OPOSITES.keys():
+      return None
+    
+    # get the value type from local metaTypeDict
+    mtype = DEFAULT_TYPE
+    if metaName in self.__metaTypeDict:
+      mtype = self.__metaTypeDict[metaName]
+      if mtype[:3].lower() == "int":
+        mtype = "int"
+      elif mtype[:5].lower() == "float":
+        mtype = "float"
+
+    isList = False
+    # get the right value
+    try:
+      if "," in termList: # the value is a list
+        if operator not in ['=','!=']:
+          return None
+        isList = True
+        if mtype == "int":
+          value = [int(val) for val in termList[2:] if ',' not in val]
+        elif mtype == "float":
+          value = [float(val) for val in termList[2:] if ',' not in val]
+        else:
+          value = [val for val in termList[2:] if ',' not in val]
+      else: # value is simple
+        if mtype == "int":
+          value = int(termList[2])
+        elif mtype == "float":
+          value = float(termList[2])
+        else:
+          value = termList[2]
+    except ValueError: # if someone tries to insert a invalid (not parsable) value
+      return None
+        
+    if not isList and operator == "=":
+      return {metaName:value}
+    else:
+      return {metaName:{operator:value}}
+
+  
+  def __addToConj(self,conj,newTerm):
+    """ Add another term to temporary conjunction buffer
+    """
+    
+    # helper construct to translate operator to function
+    def do_gt(left, right):
+      return left > right
+    def do_lt(left, right):
+      return left < right
+    def do_ge(left, right):
+      return left >= right
+    def do_le(left, right):
+      return left <= right
+    def do_eq(left, right):
+      return left == right
+    def do_neq(left,right):
+      return left != right
+    compareFunct = {'eq' : do_eq, 
+                    '!=': do_neq,
+                    '>' : do_gt,
+                    '>=': do_ge,
+                    '<' : do_lt,
+                    '<=': do_le}
+     
+    out = []
+    if not conj:
+      return newTerm
+    # combine conjunction items from the buffer and the new increment
+    for itemOld in conj:
+      for itemNew in newTerm:
+        # if the two conjunctions concern metas, just mechanically combine them
+        commonKeys = list(set(itemOld.keys()).intersection(itemNew.keys()))
+        if not commonKeys:
+          tmp = copy.deepcopy(itemOld)
+          tmp.update(itemNew)
+          out.append(tmp)
+        # the two conjunctions overlap
+        else:
+          for key in commonKeys:
+            lDict = itemOld[key]
+            rDict = itemNew[key]
+            if isinstance(lDict,dict):
+              lKey = lDict.keys()[0]
+              lVal = lDict[lKey]
+            else:
+              lKey = 'eq'
+              lVal = itemOld[key]
+            if isinstance(rDict, dict):
+              rKey = rDict.keys()[0]
+              rVal = rDict[rKey]
+            else:
+              rKey = 'eq'
+              rVal = itemNew[key]
+            
+            # now try all the combination and combine the possible operators. For sake of code shortness, the combining is
+            # done regarding order and if not matched, the operators are switched and it is tried again 
+            tried = False
+            done = False
+            while not done:
+              
+              if lKey == 'eq':
+                
+                if rKey == '=':
+                  if lVal in rVal:
+                    out.append({key:rDict})
+                    done = True
+                  else:
+                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                
+                elif rKey == '!=' and isinstance(rVal, list):
+                  if lVal not in rVal:
+                    out.append({key:lDict})
+                    done = True
+                  else:
+                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                  
+                else: # eq, >, >=, <, <=
+                  if compareFunct[rKey](lVal, rVal):
+                    out.append({key:lDict})
+                    done = True
+                  else:
+                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+
+              elif lKey == '=': # for arrays
+                
+                if rKey == '=': # for two arrays, combine the array
+                  out.append({key:{'=': set(lVal).add(set(rVal))}})
+                  done = True
+                  
+                elif rKey == '!=' and isinstance(rVal, list):
+                  if not list(set(lVal) & set(rVal)): # the two lists have no intersection
+                    out.append({key:lDict})
+                    done = True
+                  else:
+                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                  
+                elif rKey != 'eq':
+                  newVal = [val for val in lVal if compareFunct[rKey](val, rVal)]
+                  out.append( {key: {'=': newVal}} )
+                  done = True
+                  
+              elif lKey == '!=' and isinstance(lVal, list):
+                
+                if rKey == '!=':
+                  if isinstance(rVal,list):
+                    newVal = rVal
+                  else:
+                    newVal = [rVal]
+                  out.append( {key : {'!=' : list(set(lVal).add(rVal))}} )
+                  done = True
+                
+                elif rKey in ['>', '>=', '<=', '<']:
+                  newLVal = [val for val in lVal if compareFunct[rKey](val,rVal)]
+                  out.append( {key : {'!=' : newLVal , rKey : rVal}} )
+                  done = True
+                  
+              elif lKey == '!=': # with non-list value
+                
+                if rKey == '!=':
+                  if isinstance(rVal,list):
+                    newVal = rVal
+                  else:
+                    newVal = [rVal]
+                  out.append( {key : {'!=' : list(set(lVal).add(rVal))}} )
+                  done = True
+                  
+                elif rKey in ['>', '>=', '<=', '<']:
+                  if compareFunct[rKey](lVal,rVal):
+                    out.append( { key : { lKey:lVal, rKey:rVal }} )
+                  else:
+                    out.append(rDict)
+                  
+              elif lKey == '>' or lKey == '>=':
+                
+                if rKey in ['>', '>=']:
+                  if lVal > rVal:
+                    out.append({key:lDict})
+                  else:
+                    out.append({key:rDict})
+                  done = True
+                
+                elif rKey in ['<', '<=']:
+                  if lVal > rVal:
+                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                  elif lVal == rVal:
+                    if '=' in lKey or '=' in rKey:
+                      out.append({key:lVal})
+                      done = True
+                    else: # values are the same, but intervals are sharp -> no solution 
+                      raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                  else: # lVal <[=] rVal -> there is a solution 
+                    out.append( {key: {lKey:lVal, rKey:rVal}} )
+                    done = True
+                
+              elif lKey == '<' or lKey == '<=':
+                if rKey == '<' or rKey == '<=':
+                  if lVal < rVal:
+                    out.append({key:lDict})
+                  else:
+                    out.append({key:rDict})
+                  done = True
+
+              
+              if not tried:
+                tried = True
+                # swapping values for another run
+                lKey, rKey = rKey, lKey
+                lDict, rDict = rDict, lDict
+                lVal, rVal = rVal, lVal
+              elif not done: # and tried
+                raise RuntimeError("__addToConj error, combination" + str(itemNew) + " " + str(itemOld) +". not supported, please contact developer")
+                
+    return out      

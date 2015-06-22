@@ -11,6 +11,7 @@ import time
 import sys
 from types  import DictType, ListType
 
+from DIRAC import S_OK, S_ERROR
 from DIRAC.Core.Security.ProxyInfo import getProxyInfo
 from DIRAC.Core.Utilities.List import uniqueElements
 from DIRAC.Interfaces.API.Dirac import Dirac
@@ -1924,7 +1925,6 @@ File Catalog Client $Revision: 1.17 $Date:
   def __createQuery(self,args):
     """ Create the metadata query out of the command line arguments
     """    
-    argss = args.split()
     result = self.fc.getMetadataFields()
 
     if not result['OK']:
@@ -1940,7 +1940,13 @@ File Catalog Client $Revision: 1.17 $Date:
     typeDict.update( FILE_STANDARD_METAKEYS )
 
     mq = MetaQuery( typeDict = typeDict )
-    return mq.setMetaQuery( argss )
+    if not args:
+      return S_ERROR("No MetaQuery passed to __createQuery()")
+    elif args[0] in ['"', "'"]:
+      if args[-1] not in ['"', "'"]:
+        return S_ERROR("Missing %s" % (args[0]))
+      args = args[1:-1]
+    return mq.setMetaQuery( mq.parseQueryString(args) )
 
   def do_dataset( self, args ):
     """ A set of dataset manipulation commands
@@ -2017,8 +2023,13 @@ File Catalog Client $Revision: 1.17 $Date:
 
     # parsing query
     metaSelections = ' '.join( argss[start + 1:] )
-    metaDict = self.__createQuery( metaSelections )
-    # pprint ( metaDict )
+    metaDict = self.__createQuery(metaSelections)
+    
+    if metaDict['OK']:
+      MetaQuery(metaDict['Value']).prettyPrintMetaQuery()
+    else:
+      print metaDict['Message']
+    return
     if not metaDict:
       print usage_add
       print "ERROR: No or invalid meta query specified:"
