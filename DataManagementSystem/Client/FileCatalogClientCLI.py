@@ -2025,11 +2025,13 @@ File Catalog Client $Revision: 1.17 $Date:
     metaSelections = ' '.join( argss[start + 1:] )
     metaDict = self.__createQuery(metaSelections)
     
+    # parsing metaQuery testing !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     if metaDict['OK']:
-      MetaQuery(metaDict['Value']).prettyPrintMetaQuery()
+      print MetaQuery(metaDict['Value']).prettyPrintMetaQuery()
     else:
       print metaDict['Message']
     return
+    
     if not metaDict:
       print usage_add
       print "ERROR: No or invalid meta query specified:"

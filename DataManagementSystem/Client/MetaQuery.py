@@ -175,6 +175,7 @@ class MetaQuery( object ):
     result = self.__convertToDNF(queryList)
     if result['OK']:
       self.__metaQueryList = result['Value']
+      self.__metaQueryList = self.__optimize(self.__metaQueryList)
       return S_OK(self.__metaQueryList)
     else: 
       return S_ERROR(result['Message'])
@@ -208,7 +209,7 @@ class MetaQuery( object ):
           out += "%s %s %s " % (meta, str(mDict.keys()[0]), str(mDict[mDict.keys()[0]]))
         else:
           out += "%s = %s " % (meta, str(mDict))
-    print out
+    return out
 
   def applyQuery( self, userMetaDict ):
     """  Return a list of tuples with tables and conditions to locate files for a given user Metadata
@@ -289,6 +290,30 @@ class MetaQuery( object ):
 
   #============================================Private Methods===============================================
   
+  def __optimize(self, queryList):
+    mq = queryList
+    toDel = []
+    
+    # check for subsets and supersets in the metaQueryList
+    for i in range(0,len(mq)-1):
+      for j in range(i+1,len(mq)):
+        # check if mq[i] is superset of mq[j]
+        if all(item in mq[i].items() for item in mq[j].items()):
+          toDel.append(i)
+        # check if mq[j is superset of mq[i] (reverse order)
+        elif all(item in mq[j].items() for item in mq[i].items()):
+          toDel.append(j)
+    
+    # create a list of indexes of elements to delete from the metaQueryList
+    toDel = list(set(toDel))
+    toDel.sort(reverse=True)
+    
+    # delete
+    for i in toDel:
+      del mq[i]
+      
+    return mq
+  
   def __convertToDNF(self,inputList,negGlobal=False):
     out = []
     termTmp = []
@@ -314,13 +339,13 @@ class MetaQuery( object ):
             depth -= 1
           iLocal += 1
           
-        print "recursion IN"
+        #print "recursion IN"
         result = self.__convertToDNF(inputList[(i+1):iLocal-1],neg)
         if result['OK']:
-          print "recursion OK"
+          #print "recursion OK"
           last = result['Value']
         else:
-          print "recursion FAILED"
+          #print "recursion FAILED"
           return result
         i = iLocal - 1
           
