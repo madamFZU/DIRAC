@@ -2027,7 +2027,10 @@ File Catalog Client $Revision: 1.17 $Date:
     
     # parsing metaQuery testing !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     if metaDict['OK']:
+      uq = {'Meta1':1, 'Meta2':2.0, 'Meta3':'3'}
+      mq = MetaQuery(metaDict['Value'], {'Meta1':'integer', 'Meta2':'float'})
       print MetaQuery(metaDict['Value']).prettyPrintMetaQuery()
+      print mq.applyQuery(uq)
     else:
       print metaDict['Message']
     return

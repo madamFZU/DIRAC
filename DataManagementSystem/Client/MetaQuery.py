@@ -65,6 +65,20 @@ DEFAULT_TYPE = "String"
 
 class MetaQuery( object ):
 
+  # helper construct to translate operator to function
+  def do_gt(self,left, right):
+    return left > right
+  def do_lt(self,left, right):
+    return left < right
+  def do_ge(self,left, right):
+    return left >= right
+  def do_le(self,left, right):
+    return left <= right
+  def do_eq(self,left, right):
+    return left == right
+  def do_neq(self,left,right):
+    return left != right
+
   def __init__( self, queryList = None, typeDict = None ):
 
     self.__metaQueryList = []
@@ -77,6 +91,14 @@ class MetaQuery( object ):
     if typeDict is not None:
       self.__metaTypeDict = typeDict
       
+    self.compareFunct = {'eq' : self.do_eq, 
+                  '!=': self.do_neq,
+                  '>' : self.do_gt,
+                  '>=': self.do_ge,
+                  '<' : self.do_lt,
+                  '<=': self.do_le}
+      
+  
   def loadQueryList(self, queryList):
     """ Load a new query list  without loosing the metaTypeDict
     """
@@ -214,16 +236,17 @@ class MetaQuery( object ):
   def applyQuery( self, userMetaDict ):
     """  Return a list of tuples with tables and conditions to locate files for a given user Metadata
     """
+    # TODO: asd
     def getOperands( value ):
       if isinstance( value, list ):
-        return [ ('in', value) ]
+        return [ ('=', value) ]
       elif isinstance( value, dict ):
         resultList = []
         for operation, operand in value.items():
           resultList.append( ( operation, operand ) )
         return resultList
       else:
-        return [ ("=", value) ]
+        return [ ("eq", value) ]
 
     def getTypedValue( value, mtype ):
       if mtype[0:3].lower() == 'int':
@@ -234,59 +257,61 @@ class MetaQuery( object ):
         return Time.fromString( value )
       else:
         return value
-
-    for meta, value in self.__metaQueryDict.items():
-
-      # Check if user dict contains all the requested meta data
-      userValue = userMetaDict.get( meta, None )
-      if userValue is None:
-        if str( value ).lower() == 'missing':
-          continue
-        else:
-          return S_OK( False )
-      elif str( value ).lower() == 'any':
-        continue
-
-      mtype = self.__metaTypeDict[meta]
-      try:
-        userValue = getTypedValue( userValue, mtype )
-      except ValueError:
-        return S_ERROR( 'Illegal type for metadata %s: %s in user data' % ( meta, str( userValue ) ) )
-
-      # Check operations
-      for operation, operand in getOperands( value ):
-        try:
-          if isinstance( operand, list ):
-            typedValue = [ getTypedValue( x, mtype ) for x in operand ]
+    
+    for conj in self.__metaQueryList:
+      for meta, value in conj.items():
+        conjRes = True
+        # Check if user dict contains all the requested meta data
+        userValue = userMetaDict.get( meta, None )
+        if userValue is None:
+          if str( value ).lower() == 'missing':
+            continue
           else:
-            typedValue = getTypedValue( operand, mtype )
+            conjRes = False
+            break
+        elif str( value ).lower() == 'any':
+          continue
+  
+        mtype = self.__metaTypeDict.get(meta, 'None')
+        if mtype == 'None':
+          pass
+          #return S_ERROR('Cannot check type of meta')
+        
+        try:
+          userValue = getTypedValue( userValue, mtype )
         except ValueError:
-          return S_ERROR( 'Illegal type for metadata %s: %s in filter' % ( meta, str( operand ) ) )
-
-        # Apply query operation
-        if operation in ['>', '<', '>=', '<=']:
+          return S_ERROR( 'Illegal type for metadata %s: %s in user data' % ( meta, str( userValue ) ) )
+  
+        # Get parsed values 
+        for operation, operand in getOperands( value ):
+          try:
+            if isinstance( operand, list ):
+              typedValue = [ getTypedValue( x, mtype ) for x in operand ]
+            else:
+              typedValue = getTypedValue( operand, mtype )
+          except ValueError:
+            return S_ERROR( 'Illegal type for metadata %s: %s in filter' % ( meta, str( operand ) ) )
+  
+          # Apply query operation
           if isinstance( typedValue, list ):
-            return S_ERROR( 'Illegal query: list of values for comparison operation' )
-          elif operation == '>' and typedValue >= userValue:
-            return S_OK( False )
-          elif operation == '<' and typedValue <= userValue:
-            return S_OK( False )
-          elif operation == '>=' and typedValue > userValue:
-            return S_OK( False )
-          elif operation == '<=' and typedValue < userValue:
-            return S_OK( False )
-        elif operation == 'in' or operation == "=":
-          if isinstance( typedValue, list ) and not userValue in typedValue:
-            return S_OK( False )
-          elif not isinstance( typedValue, list ) and userValue != typedValue:
-            return S_OK( False )
-        elif operation == 'nin' or operation == "!=":
-          if isinstance( typedValue, list ) and userValue in typedValue:
-            return S_OK( False )
-          elif not isinstance( typedValue, list ) and userValue == typedValue:
-            return S_OK( False )
+            if operation == '!=':
+              if userValue in typedValue:
+                conjRes = False
+                break
+            elif operation == '=':
+              if userValue not in typedValue:
+                conjRes = False
+                break
+          
+          else: # value is not a list
+            if not self.compareFunct[operation](userValue,typedValue):
+              conjRes = False
+              break
+      
+      if conjRes:
+        return S_OK( True )
 
-    return S_OK( True )
+    return S_OK( False )
 
   #============================================Private Methods===============================================
   
@@ -379,7 +404,6 @@ class MetaQuery( object ):
             return S_ERROR( 'Error occured: %s' % str(e) )
         
         else:
-          # TODO: check valid possitions
           if atom == 'NOT':
             neg = not neg # toggle the neg flag
           
@@ -489,32 +513,11 @@ class MetaQuery( object ):
       return {metaName:value}
     else:
       return {metaName:{operator:value}}
-
-  
+    
   def __addToConj(self,conj,newTerm):
     """ Add another term to temporary conjunction buffer
     """
-    
-    # helper construct to translate operator to function
-    def do_gt(left, right):
-      return left > right
-    def do_lt(left, right):
-      return left < right
-    def do_ge(left, right):
-      return left >= right
-    def do_le(left, right):
-      return left <= right
-    def do_eq(left, right):
-      return left == right
-    def do_neq(left,right):
-      return left != right
-    compareFunct = {'eq' : do_eq, 
-                    '!=': do_neq,
-                    '>' : do_gt,
-                    '>=': do_ge,
-                    '<' : do_lt,
-                    '<=': do_le}
-     
+
     out = []
     if not conj:
       return newTerm
@@ -568,7 +571,7 @@ class MetaQuery( object ):
                     raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
                   
                 else: # eq, >, >=, <, <=
-                  if compareFunct[rKey](lVal, rVal):
+                  if self.compareFunct[rKey](lVal, rVal):
                     out.append({key:lDict})
                     done = True
                   else:
@@ -588,7 +591,7 @@ class MetaQuery( object ):
                     raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
                   
                 elif rKey != 'eq':
-                  newVal = [val for val in lVal if compareFunct[rKey](val, rVal)]
+                  newVal = [val for val in lVal if self.compareFunct[rKey](val, rVal)]
                   out.append( {key: {'=': newVal}} )
                   done = True
                   
@@ -603,7 +606,7 @@ class MetaQuery( object ):
                   done = True
                 
                 elif rKey in ['>', '>=', '<=', '<']:
-                  newLVal = [val for val in lVal if compareFunct[rKey](val,rVal)]
+                  newLVal = [val for val in lVal if self.compareFunct[rKey](val,rVal)]
                   out.append( {key : {'!=' : newLVal , rKey : rVal}} )
                   done = True
                   
@@ -618,7 +621,7 @@ class MetaQuery( object ):
                   done = True
                   
                 elif rKey in ['>', '>=', '<=', '<']:
-                  if compareFunct[rKey](lVal,rVal):
+                  if self.compareFunct[rKey](lVal,rVal):
                     out.append( { key : { lKey:lVal, rKey:rVal }} )
                   else:
                     out.append(rDict)
