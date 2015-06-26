@@ -116,6 +116,7 @@ class MetaQuery( object ):
         :returns array of parsed literals for the setMetaQuery function
     """
     operators = ['>','<','!','=',',',')','(']
+    allowed = ['/']
     tokens = []
     nextStr = ""
     
@@ -139,6 +140,9 @@ class MetaQuery( object ):
         nextStr += (ch)
       elif ch in ["'", '"']:
         quote = ch
+        if op:
+          nextStr = __push(nextStr)
+          op = False          
       
       # check for two char operators, all of which have the second char '='
       elif op and ch == '=':
@@ -154,7 +158,7 @@ class MetaQuery( object ):
           nextStr += (ch)
     
       # char can be part of name or value, just push it
-      elif ch.isalpha() or ch.isdigit():
+      elif ch.isalpha() or ch.isdigit() or ch in allowed:
         nextStr += (ch)
     
       # char can be part of an operator
@@ -182,7 +186,6 @@ class MetaQuery( object ):
       
     # making the old notation compatible
     if 'AND' not in queryList and 'OR' not in queryList:
-      print 'NO AND'
       opInds = []
       ind = 0
       for atom in queryList:
@@ -312,6 +315,17 @@ class MetaQuery( object ):
         return S_OK( True )
 
     return S_OK( False )
+  
+  def combineWithMetaQuery(self, combQueryList):
+    """ Combine with another MetaQuery in a conjunction
+    """
+    try:
+      out = self.__addToConj(self.__metaQueryList, combQueryList)
+      out = self.__optimize(out)
+    except RuntimeError as e:
+      return S_ERROR('Error combining: %s' % str(e))
+    
+    return S_OK(out)    
 
   #============================================Private Methods===============================================
   
@@ -561,21 +575,21 @@ class MetaQuery( object ):
                     out.append({key:rDict})
                     done = True
                   else:
-                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                    raise RuntimeError("__addToConj error: trying to AND: "+MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery())
                 
                 elif rKey == '!=' and isinstance(rVal, list):
                   if lVal not in rVal:
                     out.append({key:lDict})
                     done = True
                   else:
-                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                    raise RuntimeError("__addToConj error: trying to AND: "+MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery())
                   
                 else: # eq, >, >=, <, <=
                   if self.compareFunct[rKey](lVal, rVal):
                     out.append({key:lDict})
                     done = True
                   else:
-                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                    raise RuntimeError("__addToConj error: trying to AND: "+MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery())
 
               elif lKey == '=': # for arrays
                 
@@ -588,7 +602,7 @@ class MetaQuery( object ):
                     out.append({key:lDict})
                     done = True
                   else:
-                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                    raise RuntimeError("__addToConj error: trying to AND: "+MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery())
                   
                 elif rKey != 'eq':
                   newVal = [val for val in lVal if self.compareFunct[rKey](val, rVal)]
@@ -637,13 +651,13 @@ class MetaQuery( object ):
                 
                 elif rKey in ['<', '<=']:
                   if lVal > rVal:
-                    raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                    raise RuntimeError("__addToConj error: trying to AND: "+MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery())
                   elif lVal == rVal:
                     if '=' in lKey or '=' in rKey:
                       out.append({key:lVal})
                       done = True
                     else: # values are the same, but intervals are sharp -> no solution 
-                      raise RuntimeError("__addToConj error: trying to AND: "+str(itemNew) + " " + str(itemOld))
+                      raise RuntimeError("__addToConj error: trying to AND: "+MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery())
                   else: # lVal <[=] rVal -> there is a solution 
                     out.append( {key: {lKey:lVal, rKey:rVal}} )
                     done = True
@@ -664,6 +678,6 @@ class MetaQuery( object ):
                 lDict, rDict = rDict, lDict
                 lVal, rVal = rVal, lVal
               elif not done: # and tried
-                raise RuntimeError("__addToConj error, combination" + str(itemNew) + " " + str(itemOld) +". not supported, please contact developer")
+                raise RuntimeError("__addToConj error, combination" + MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery() +". not supported, please contact developer")
                 
     return out      
