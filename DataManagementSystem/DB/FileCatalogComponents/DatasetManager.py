@@ -1,6 +1,7 @@
 ########################################################################
 # $HeadURL$
 ########################################################################
+from DataManagementSystem.Client.MetaQuery import MetaQuery
 
 """ DIRAC FileCatalog plug-in class to manage dynamic datasets defined by a metadata query
 """
@@ -261,18 +262,23 @@ class DatasetManager:
         gLogger.warn( 'Selecting files from a frozen dataset failed' )
         return result
       fileIDs = [int( fid[0] ) for fid in result['Value']]
+      res = self.db.fileManager._getFileLFNs( fileIDs )
+      if not res['OK']:
+        return res
 
     req = ""
     for table in ["FC_MetaDatasets", "FC_DatasetAnnotations", "FC_MetaDatasetFiles"]:
       req += "DELETE FROM %s WHERE DatasetID=%s; " % ( table, datasetID )
     gLogger.info( "Deleting dataset " + datasetName )
     result = self.db._update( req )
-    res = self.db.fileManager._getFileLFNs( fileIDs )
-    # pprint( res )
-    if not res['OK']:
-      return res
-    result['LFNs'] = [ lfn for lfn in res['Value']['Successful'].values()]
-    result['Failed'] = res['Value']['Failed']
+    
+    if fileIDs:
+      result['LFNs'] = [ lfn for lfn in res['Value']['Successful'].values()]
+      result['Failed'] = res['Value']['Failed']
+    else:
+      result['LFNs'] = []
+      result['Failed'] = []
+    
     return result
 
   def checkDataset( self, dsNames, credDict ):  # ok
@@ -830,8 +836,7 @@ class DatasetManager:
           return S_OK( result['Value']['LFNList'] )
 
       else:  # statuses are different
-        combinedMeta = [ 1 ]  # self.__compareMetaqueries( dsDicts[datasetNames[0]]['MetaQ'], dsDicts[datasetNames[1]]['MetaQ'] )
-        gLogger.error( "REMOVE DEVELOPMENT ASSIGNEMENT!" )
+        self.__compareMetaqueries( dsDicts[datasetNames[0]]['MetaQ'], dsDicts[datasetNames[1]]['MetaQ'] )
         # check, if there can be any same files in both datasets
         if not combinedMeta:
           return S_OK()
@@ -872,9 +877,11 @@ class DatasetManager:
     """
     meta1 = eval(meta1)
     meta2 = eval(meta2)
-    pprint( meta1 )
-    pprint( meta2 )
-    return []
+    result = MetaQuery(meta1).combineWithMetaQuery(meta2)
+    if result['OK']:
+      return result['Value']
+    else:
+      return []
 
   def __setDatasetStatus( self, dsID, status ):
     """ Set the given dataset status
