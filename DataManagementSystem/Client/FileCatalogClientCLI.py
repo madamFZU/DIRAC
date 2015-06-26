@@ -2023,17 +2023,13 @@ File Catalog Client $Revision: 1.17 $Date:
 
     # parsing query
     metaSelections = ' '.join( argss[start + 1:] )
-    metaDict = self.__createQuery(metaSelections)
-    
-    # parsing metaQuery testing !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    if metaDict['OK']:
-      uq = {'Meta1':1, 'Meta2':2.0, 'Meta3':'3'}
-      mq = MetaQuery(metaDict['Value'], {'Meta1':'integer', 'Meta2':'float'})
-      print MetaQuery(metaDict['Value']).prettyPrintMetaQuery()
-      print mq.applyQuery(uq)
+    result = self.__createQuery(metaSelections)
+    if result['OK']:
+      # FIXME: remove the transformation from list to dict once ready
+      metaDict = result['Value'][0]
     else:
-      print metaDict['Message']
-    return
+      print result['Message']
+      return
     
     if not metaDict:
       print usage_add
@@ -2121,9 +2117,9 @@ File Catalog Client $Revision: 1.17 $Date:
     if not result['OK']:
       print "ERROR: failed to remove dataset:", result['Message']
     else:
-      print "Successfully removed dataset", datasetName  
+      print "Successfully removed dataset", datasetName
       if result['Failed']:
-        print "Some fileIDs couldn't be resolved:"
+        print "Some fileIDs couldn't be resolved"
         # pprint( result['Failed'] )
       if result['LFNs']:
         print "The deleted dataset was frozen."
@@ -2568,7 +2564,10 @@ File Catalog Client $Revision: 1.17 $Date:
       self.__printDsName( name )
       for key, value in datasetDict[dName].items():
         if key in wanted:
-          records.insert( 0, [key, str( value )] )
+          if key == 'MetaQuery':
+            records.insert( 0, [key, MetaQuery( eval(value) ).prettyPrintMetaQuery()] )
+          else:
+            records.insert( 0, [key, str( value )] )
         else:
           records.append( [key, str( value )] )
       printTable( fields, records )
@@ -2595,6 +2594,28 @@ File Catalog Client $Revision: 1.17 $Date:
       return ''
 
     return [self.getPath( dsName ) for dsName in argss]
+  
+  # function for metaquery test parsing and other operations
+  # TODO: remove
+  def do_mqtest(self, args):
+    """Test method to try out metaquery parsing
+    """
+    metaDict = self.__createQuery(args)
+    r = self.__createQuery("A=1 OR B=3")
+    metaDict2 = r['Value']
+    
+    if metaDict['OK']:
+      mq = MetaQuery(metaDict['Value'], {'Meta1':'integer', 'Meta2':'float'})
+      print mq.prettyPrintMetaQuery()
+      res = mq.combineWithMetaQuery(metaDict2)
+      if res['OK']:
+        mq = res['Value']
+        print MetaQuery(mq).prettyPrintMetaQuery()
+      else:
+        print res['Message']
+    else:
+      print metaDict['Message']
+    return
 
   def do_stats( self, args ):
     """ Get the catalog statistics
