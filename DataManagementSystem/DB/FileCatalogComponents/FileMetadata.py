@@ -8,6 +8,8 @@
 
 __RCSID__ = "$Id$"
 
+from pprint import pprint
+from cassandra.cluster import Cluster
 from types import IntType, ListType, LongType, DictType, StringTypes, FloatType
 from DIRAC import S_OK, S_ERROR
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities import queryTime
@@ -20,6 +22,7 @@ class FileMetadata:
 
   def __init__( self, database = None ):
 
+    self.nosql = CassandraHandler()
     self.db = database
 
   def setDatabase( self, database ):
@@ -54,57 +57,18 @@ class FileMetadata:
         return S_ERROR( 'Attempt to add an existing metadata with different type: %s/%s' %
                         ( ptype, result['Value'][pname] ) )
 
-    valueType = ptype
-    if ptype == "MetaSet":
-      valueType = "VARCHAR(64)"
-    req = "CREATE TABLE FC_FileMeta_%s ( FileID INTEGER NOT NULL, Value %s, PRIMARY KEY (FileID), INDEX (Value) )" \
-                              % ( pname, valueType )
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-
-    result = self.db._insert( 'FC_FileMetaFields', ['MetaName', 'MetaType'], [pname, ptype] )
-    if not result['OK']:
-      return result
-
-    metadataID = result['lastRowId']
-    result = self.__transformMetaParameterToData( pname )
-    if not result['OK']:
-      return result
-
-    return S_OK( "Added new metadata: %d" % metadataID )
-
+    return self.nosql.addField("files", pname, ptype)
+    
   def deleteMetadataField( self, pname, credDict ):
     """ Remove metadata field
     """
-
-    req = "DROP TABLE FC_FileMeta_%s" % pname
-    result = self.db._update( req )
-    error = ''
-    if not result['OK']:
-      error = result["Message"]
-    req = "DELETE FROM FC_FileMetaFields WHERE MetaName='%s'" % pname
-    result = self.db._update( req )
-    if not result['OK']:
-      if error:
-        result["Message"] = error + "; " + result["Message"]
-    return result
+    return self.nosql.rmField("files", pname)
 
   def getFileMetadataFields( self, credDict ):
     """ Get all the defined metadata fields
     """
-
-    req = "SELECT MetaName,MetaType FROM FC_FileMetaFields"
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-
-    metaDict = {}
-    for row in result['Value']:
-      metaDict[row[0]] = row[1]
-
-    return S_OK( metaDict )
-
+    return self.nosql.getMetadataFields("files")
+    
 ###########################################################
 #
 # Set and get metadata for files
@@ -129,18 +93,11 @@ class FileMetadata:
 
     for metaName, metaValue in metadict.items():
       if not metaName in metaFields:
-        result = self.__setFileMetaParameter( fileID, metaName, metaValue, credDict )
+        return S_ERROR("MetaField not found")
       else:
-        result = self.db._insert( 'FC_FileMeta_%s' % metaName, ['FileID', 'Value'], [fileID, metaValue] )
+        result = self.nosql.setMeta("files", metaName, metaValue, fileID)
         if not result['OK']:
-          if result['Message'].find( 'Duplicate' ) != -1:
-            req = "UPDATE FC_FileMeta_%s SET Value='%s' WHERE FileID=%d" % ( metaName, metaValue, fileID )
-            result = self.db._update( req )
-            if not result['OK']:
-              return result
-          else:
-            return result
-
+          return S_ERROR(result['Message'])
     return S_OK()
 
   def removeMetadata( self, path, metadata, credDict ):
@@ -161,25 +118,10 @@ class FileMetadata:
 
     failedMeta = {}
     for meta in metadata:
-      if meta in metaFields:
-        # Indexed meta case
-        req = "DELETE FROM FC_FileMeta_%s WHERE FileID=%d" % ( meta, fileID )
-        result = self.db._update( req )
-        if not result['OK']:
-          failedMeta[meta] = result['Value']
-      else:
-        # Meta parameter case
-        req = "DELETE FROM FC_FileMeta WHERE MetaKey='%s' AND FileID=%d" % ( meta, fileID )
-        result = self.db._update( req )
-        if not result['OK']:
-          failedMeta[meta] = result['Value']
-
-    if failedMeta:
-      metaExample = failedMeta.keys()[0]
-      result = S_ERROR( 'Failed to remove %d metadata, e.g. %s' % ( len( failedMeta ), failedMeta[metaExample] ) )
-      result['FailedMetadata'] = failedMeta
-    else:
-      return S_OK()
+      result = self.nosql.rmMeta("files", meta, fileID)
+      if not result['OK']:
+        return S_ERROR(result['Message'])
+    return S_OK()
 
   def __getFileID( self, path ):
 

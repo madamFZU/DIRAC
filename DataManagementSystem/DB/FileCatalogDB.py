@@ -832,7 +832,7 @@ class FileCatalogDB( DB ):
     failed = res['Value']['Failed']
     successful = {}
     for lfn in res['Value']['Successful']:
-      result = self.dtree.getDirectoryParameters( lfn )
+      result = self.dtree.U( lfn )
       if result['OK']:
         successful[lfn] = result['Value']
       else:

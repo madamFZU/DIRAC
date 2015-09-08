@@ -10,12 +10,14 @@ __RCSID__ = "$Id$"
 import os, types
 from DIRAC import S_OK, S_ERROR
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities import queryTime
+from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import CassandraHandler
 
 class DirectoryMetadata:
 
   def __init__( self, database = None ):
 
     self.db = database
+    self.nosql = CassandraHandler
 
   def setDatabase( self, database ):
     self.db = database
@@ -29,7 +31,7 @@ class DirectoryMetadata:
     """ Add a new metadata parameter to the Metadata Database.
         pname - parameter name, ptype - parameter type in the MySQL notation
     """
-
+    
     result = self.db.fmeta.getFileMetadataFields( credDict )
     if not result['OK']:
       return result
@@ -45,18 +47,6 @@ class DirectoryMetadata:
       else:
         return S_ERROR( 'Attempt to add an existing metadata with different type: %s/%s' %
                         ( ptype, result['Value'][pname] ) )
-
-    valueType = ptype
-    if ptype.lower()[:3] == 'int':
-      valueType = 'INT'
-    elif ptype.lower() == 'string':
-      valueType = 'VARCHAR(128)'
-    elif ptype.lower() == 'float':
-      valueType = 'FLOAT'
-    elif ptype.lower() == 'date':
-      valueType = 'DATETIME'
-    elif ptype == "MetaSet":
-      valueType = "VARCHAR(64)"
 
     req = "CREATE TABLE FC_Meta_%s ( DirID INTEGER NOT NULL, Value %s, PRIMARY KEY (DirID), INDEX (Value) )" \
                               % ( pname, valueType )

@@ -1598,7 +1598,7 @@ File Catalog Client $Revision: 1.17 $Date:
       return
     
     metadata = argss[1:]
-    result = self.fc.removeMetadata(path,metadata)
+    result = self.fc.removeMetadata({path:metadata})
     if not result['OK']:
       print "Error:", result['Message']
       if "FailedMetadata" in result:
@@ -1874,7 +1874,8 @@ File Catalog Client $Revision: 1.17 $Date:
         if not result['OK']:
           print "Illegal metaQuery:", ' '.join(argss), result['Message']
           return
-        metaDict = result['Value']
+        # TODO: remove, only for test pourposes
+        metaDict = result['Value'][0]
     else:
       metaDict = {}    
     if verbose: print "Query:",metaDict
