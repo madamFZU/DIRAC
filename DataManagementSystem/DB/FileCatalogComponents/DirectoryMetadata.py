@@ -8,6 +8,7 @@
 __RCSID__ = "$Id$"
 
 import os, types
+from pprint import pprint
 from DIRAC import S_OK, S_ERROR
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities import queryTime
 from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import CassandraHandler
@@ -17,7 +18,7 @@ class DirectoryMetadata:
   def __init__( self, database = None ):
 
     self.db = database
-    self.nosql = CassandraHandler
+    self.nosql = CassandraHandler()
 
   def setDatabase( self, database ):
     self.db = database
@@ -48,53 +49,17 @@ class DirectoryMetadata:
         return S_ERROR( 'Attempt to add an existing metadata with different type: %s/%s' %
                         ( ptype, result['Value'][pname] ) )
 
-    req = "CREATE TABLE FC_Meta_%s ( DirID INTEGER NOT NULL, Value %s, PRIMARY KEY (DirID), INDEX (Value) )" \
-                              % ( pname, valueType )
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-
-    result = self.db._insert( 'FC_MetaFields', ['MetaName', 'MetaType'], [pname, ptype] )
-    if not result['OK']:
-      return result
-
-    metadataID = result['lastRowId']
-    result = self.__transformMetaParameterToData( pname )
-    if not result['OK']:
-      return result
-
-    return S_OK( "Added new metadata: %d" % metadataID )
+    return self.nosql.addField("dirs", pname, ptype)
 
   def deleteMetadataField( self, pname, credDict ):
     """ Remove metadata field
     """
-
-    req = "DROP TABLE FC_Meta_%s" % pname
-    result = self.db._update( req )
-    error = ''
-    if not result['OK']:
-      error = result["Message"]
-    req = "DELETE FROM FC_MetaFields WHERE MetaName='%s'" % pname
-    result = self.db._update( req )
-    if not result['OK']:
-      if error:
-        result["Message"] = error + "; " + result["Message"]
-    return result
+    return self.nosql.rmField("dirs", pname)
 
   def getMetadataFields( self, credDict ):
     """ Get all the defined metadata fields
     """
-
-    req = "SELECT MetaName,MetaType FROM FC_MetaFields"
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-
-    metaDict = {}
-    for row in result['Value']:
-      metaDict[row[0]] = row[1]
-
-    return S_OK( metaDict )
+    return self.nosql.getMetadataFields("dirs")
 
   def addMetadataSet( self, metaSetName, metaSetDict, credDict ):
     """ Add a new metadata set with the contents from metaSetDict
@@ -164,11 +129,6 @@ class DirectoryMetadata:
   def setMetadata( self, dpath, metadict, credDict ):
     """ Set the value of a given metadata field for the the given directory path
     """
-    result = self.getMetadataFields( credDict )
-    if not result['OK']:
-      return result
-    metaFields = result['Value']
-
     result = self.db.dtree.findDir( dpath )
     if not result['OK']:
       return result
@@ -177,28 +137,23 @@ class DirectoryMetadata:
     dirID = result['Value']
 
     dirmeta = self.getDirectoryMetadata( dpath, credDict, owndata = False )
+    pprint(dirmeta)
     if not dirmeta['OK']:
       return dirmeta
+    metadataTypeDict = dirmeta['MetadataType']
 
     for metaName, metaValue in metadict.items():
-      if not metaName in metaFields:
-        result = self.setMetaParameter( dpath, metaName, metaValue, credDict )
-        if not result['OK']:
-          return result
-        continue
+      if not metaName in metadataTypeDict:
+        return S_ERROR("MetaField not found")
       # Check that the metadata is not defined for the parent directories
       if metaName in dirmeta['Value']:
         return S_ERROR( 'Metadata conflict detected for %s for directory %s' % ( metaName, dpath ) )
-      result = self.db._insert( 'FC_Meta_%s' % metaName, ['DirID', 'Value'], [dirID, metaValue] )
+      # Change the DB record
+      print "type: " +  metadataTypeDict[metaName]
+      result =  self.nosql.setMeta("dirs", metaName, metaValue, metadataTypeDict[metaName], dirID)
       if not result['OK']:
-        if result['Message'].find( 'Duplicate' ) != -1:
-          req = "UPDATE FC_Meta_%s SET Value='%s' WHERE DirID=%d" % ( metaName, metaValue, dirID )
-          result = self.db._update( req )
-          if not result['OK']:
-            return result
-        else:
-          return result
-
+        return result
+      
     return S_OK()
 
   def removeMetadata( self, dpath, metadata, credDict ):
@@ -216,28 +171,17 @@ class DirectoryMetadata:
       return S_ERROR( 'Path not found: %s' % dpath )
     dirID = result['Value']
 
-    failedMeta = {}
+    failed = []
     for meta in metadata:
-      if meta in metaFields:
-        # Indexed meta case
-        req = "DELETE FROM FC_Meta_%s WHERE DirID=%d" % ( meta, dirID )
-        result = self.db._update( req )
-        if not result['OK']:
-          failedMeta[meta] = result['Value']
-      else:
-        # Meta parameter case
-        req = "DELETE FROM FC_DirMeta WHERE MetaKey='%s' AND DirID=%d" % ( meta, dirID )
-        result = self.db._update( req )
-        if not result['OK']:
-          failedMeta[meta] = result['Value']
-
-    if failedMeta:
-      metaExample = failedMeta.keys()[0]
-      result = S_ERROR( 'Failed to remove %d metadata, e.g. %s' % ( len( failedMeta ), failedMeta[metaExample] ) )
-      result['FailedMetadata'] = failedMeta
+      result = self.nosql.rmMeta("dirs", meta, dirID)
+      if not result['OK']:
+        failed.append(meta)
+    
+    if failed:
+      return S_ERROR("Failed to remove metadata: " + ",".join(failed))
     else:
       return S_OK()
-
+    
   def setMetaParameter( self, dpath, metaName, metaValue, credDict ):
     """ Set an meta parameter - metadata which is not used in the the data
         search operations
@@ -320,31 +264,28 @@ class DirectoryMetadata:
       pathIDs = pathIDs[:-1]
     pathString = ','.join( [ str( x ) for x in pathIDs ] )
 
-    for meta in metaFields:
-      req = "SELECT Value,DirID FROM FC_Meta_%s WHERE DirID in (%s)" % ( meta, pathString )
-      result = self.db._query( req )
-      if not result['OK']:
-        return result
-      if len( result['Value'] ) > 1:
-        return S_ERROR( 'Metadata conflict for directory %s' % path )
-      if result['Value']:
-        metaDict[meta] = result['Value'][0][0]
-        if int( result['Value'][0][1] ) == dirID:
-          metaOwnerDict[meta] = 'OwnMetadata'
-        else:
-          metaOwnerDict[meta] = 'ParentMetadata'
-      metaTypeDict[meta] = metaFields[meta]
-
-    # Get also non-searchable data  
-    result = self.getDirectoryMetaParameters( path, credDict, inherited, owndata )
-    if result['OK']:
-      metaDict.update( result['Value'] )
-      for meta in result['Value']:
-        metaOwnerDict[meta] = 'OwnParameter'
-
-    result = S_OK( metaDict )
+    metaList = metaFields.keys()
+    result = self.nosql.getMeta("dirs", pathString, metaList)
+    if not result['OK']:
+      return result
+    rows = result['Value']
+    
+    for row in rows:
+      if int(row['dirid']) == dirID:
+        ownerProp = 'OwnMetadata'
+      else:
+        ownerProp = 'ParentMetadata'
+      
+      row.pop('dirid')
+      for key in row.keys():
+        if row[key] == None:
+          continue
+        metaDict[key] = row[key]
+        metaOwnerDict[key] = ownerProp
+        
+    result = S_OK( dict(metaDict) )
     result['MetadataOwner'] = metaOwnerDict
-    result['MetadataType'] = metaTypeDict
+    result['MetadataType'] = metaFields
     return result
 
   def __transformMetaParameterToData( self, metaname ):
@@ -557,7 +498,6 @@ class DirectoryMetadata:
     """ Find Directories satisfying the given metadata and being subdirectories of 
         the given path
     """
-
     pathDirList = []
     pathDirID = 0
     pathString = '0'

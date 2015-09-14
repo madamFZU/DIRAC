@@ -217,7 +217,10 @@ class FileCatalogClient(Client):
     result = rpcClient.getFileUserMetadata(path)
     if not result['OK']:
       return result
-    fmeta = result['Value']
+    if not result['Value']:
+      fmeta = {}
+    else:
+      fmeta = result['Value']
     result = rpcClient.getDirectoryUserMetadata(directory)
     if not result['OK']:
       return result

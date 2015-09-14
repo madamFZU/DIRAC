@@ -9,7 +9,6 @@
 __RCSID__ = "$Id$"
 
 from pprint import pprint
-from cassandra.cluster import Cluster
 from types import IntType, ListType, LongType, DictType, StringTypes, FloatType
 from DIRAC import S_OK, S_ERROR
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities import queryTime
@@ -17,6 +16,7 @@ from DIRAC.Core.Utilities.List import intListToString
 from DIRAC.DataManagementSystem.Client.MetaQuery import FILE_STANDARD_METAKEYS, \
                                                         FILES_TABLE_METAKEYS, \
                                                         FILEINFO_TABLE_METAKEYS
+from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import CassandraHandler
 
 class FileMetadata:
 
@@ -95,7 +95,7 @@ class FileMetadata:
       if not metaName in metaFields:
         return S_ERROR("MetaField not found")
       else:
-        result = self.nosql.setMeta("files", metaName, metaValue, fileID)
+        result = self.nosql.setMeta("files", metaName, metaValue,  metaFields[metaName], fileID)
         if not result['OK']:
           return S_ERROR(result['Message'])
     return S_OK()
@@ -188,7 +188,7 @@ class FileMetadata:
     result = self.getFileMetadataFields( credDict )
     if not result['OK']:
       return result
-    metaFields = result['Value']
+    metaTypeDict = result['Value']
 
     result = self.__getFileID( path )
     if not result['OK']:
@@ -196,23 +196,16 @@ class FileMetadata:
     fileID = result['Value']
 
     metaDict = {}
-    metaTypeDict = {}
-    for meta in metaFields:
-      req = "SELECT Value,FileID FROM FC_FileMeta_%s WHERE FileID=%d" % ( meta, fileID )
-      result = self.db._query( req )
-      if not result['OK']:
-        return result
-      if result['Value']:
-        metaDict[meta] = result['Value'][0][0]
-      metaTypeDict[meta] = metaFields[meta]
-
-    result = self.getFileMetaParameters( path, credDict )
-    if result['OK']:
-      metaDict.update( result['Value'] )
-      for meta in result['Value']:
-        metaTypeDict[meta] = 'NonSearchable'
-
-    result = S_OK( metaDict )
+    metaList = metaTypeDict.keys()
+    result = self.nosql.getMeta("files", fileID, metaList)
+    if not result['OK']:
+      return result
+    if not result['Value']:
+      return S_OK()
+    metaDict = result['Value'][0]
+    metaDict.pop('fileid')
+    
+    result = S_OK( dict( metaDict ) )
     result['MetadataType'] = metaTypeDict
     return result
 

@@ -1647,6 +1647,8 @@ File Catalog Client $Revision: 1.17 $Date:
       path = self.getPath(path)
 
     path = path.rstrip( '/' )
+    if path[0] == '/' and path[1] == '/':
+      path = path[1:]
       
     if not dirFlag:
       # Have to decide if it is a file or not
@@ -1656,7 +1658,7 @@ File Catalog Client $Revision: 1.17 $Date:
       if not result['Value']['Successful']:
         print "ERROR: Path not found"
       dirFlag = not result['Value']['Successful'][path]        
-        
+    
     if dirFlag:    
       result = self.fc.getDirectoryUserMetadata(path)
       if not result['OK']:
@@ -1687,16 +1689,17 @@ File Catalog Client $Revision: 1.17 $Date:
               print " "*10,m.rjust(20),':',v      
       else:
         print "No metadata defined for directory"   
-    else:
-      result = self.fc.getFileUserMetadata(path)      
+    else: # dirFlag == False
+      result = self.fc.getFileUserMetadata(path)
       if not result['OK']:
         print ("Error: %s" % result['Message']) 
         return
       if result['Value']:      
         for meta,value in result['Value'].items():
-          print meta.rjust(20),':', value
+          if value:
+            print meta.rjust(20),':', value
       else:
-        print "No metadata found"        
+        print "No metadata defined for file"       
       
   def metaTag(self,argss):
     """ Get values of a given metadata tag compatible with the given selection
@@ -1769,8 +1772,12 @@ File Catalog Client $Revision: 1.17 $Date:
       if not result['Value']:
         print "No entries found"
       else:  
-        for meta,_type in result['Value'].items():
-          print meta.rjust(20),':',_type
+        for metaType,metaDict in result['Value'].items():
+          print metaType + ":"
+          for meta,val in metaDict.items():
+            if meta == 'fileid' or meta == 'dirid':
+              continue
+            print meta.rjust(20),':',val
 
   def registerMeta(self,argss):
     """ Add metadata field. 
@@ -1805,15 +1812,13 @@ File Catalog Client $Revision: 1.17 $Date:
     if mtype.lower()[:3] == 'int':
       rtype = 'INT'
     elif mtype.lower()[:7] == 'varchar':
-      rtype = mtype
+      rtype = 'varchar'
     elif mtype.lower() == 'string':
-      rtype = 'VARCHAR(128)'
+      rtype = 'varchar'
     elif mtype.lower() == 'float':
       rtype = 'FLOAT'
-    elif mtype.lower() == 'date':
-      rtype = 'DATETIME'
-    elif mtype.lower() == 'metaset':
-      rtype = 'MetaSet'
+    elif mtype.lower() == 'date' or mtype.lower() == 'timestamp':
+      rtype = 'timestamp'
     else:
       print "Error: illegal metadata type %s" % mtype
       return
@@ -1874,8 +1879,6 @@ File Catalog Client $Revision: 1.17 $Date:
         if not result['OK']:
           print "Illegal metaQuery:", ' '.join(argss), result['Message']
           return
-        # TODO: remove, only for test pourposes
-        metaDict = result['Value'][0]
     else:
       metaDict = {}    
     if verbose: print "Query:",metaDict

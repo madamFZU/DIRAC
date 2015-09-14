@@ -361,7 +361,7 @@ class FileCatalogHandler( RequestHandler ):
   types_getDirectoryMetadata = [ [ ListType, DictType ] + list( StringTypes ) ]
   def export_getDirectoryMetadata( self, lfns ):
     """ Get the size of the supplied directory """
-    return gFileCatalogDB.getDirectoryMetadata( lfns, self.getRemoteCredentials() )
+    return gFileCatalogDB.dmeta.getDirectoryMetadata( lfns, self.getRemoteCredentials() )
 
   types_getDirectorySize = [ [ ListType, DictType ] + list( StringTypes ) ]
   def export_getDirectorySize( self, lfns, longOut = False, fromFiles = False ):
@@ -413,16 +413,27 @@ class FileCatalogHandler( RequestHandler ):
   def export_deleteMetadataField( self, fieldName ):
     """ Delete the metadata field 
     """
-    result = gFileCatalogDB.dmeta.deleteMetadataField( fieldName, self.getRemoteCredentials() )
-    error = ''
-    if not result['OK']:
-      error = result['Message']
-    result = gFileCatalogDB.fmeta.deleteMetadataField( fieldName, self.getRemoteCredentials() )
-    if not result['OK']:
-      if error:
-        result["Message"] = error + "; " + result["Message"]
+    resultDir = gFileCatalogDB.dmeta.getMetadataFields( self.getRemoteCredentials() )
+    if resultDir['OK'] and fieldName in resultDir['Value'].keys():
+      result = gFileCatalogDB.dmeta.deleteMetadataField( fieldName, self.getRemoteCredentials() )
+      if not result['OK']:
+        return S_ERROR("Unable to remove directory meta index:" + result['Message'])
+      else:
+        return S_OK()
+    
+    resultFile = gFileCatalogDB.fmeta.getFileMetadataFields( self.getRemoteCredentials() )
+    if resultFile['OK'] and fieldName in resultFile['Value'].keys():
+      result = gFileCatalogDB.fmeta.deleteMetadataField( fieldName, self.getRemoteCredentials() )
+      if not result['OK']:
+        return S_ERROR("Unable to remove file meta index:" + result['Message'])
+      else:
+        return S_OK()
+    
+    if not resultFile['OK'] or not resultDir['OK']:
+      return S_ERROR("Unable to retrieve list of meta fields")
+    else:
+      return S_ERROR("MetaField not found")
 
-    return result
 
   types_getMetadataFields = [ ]
   def export_getMetadataFields( self ):
