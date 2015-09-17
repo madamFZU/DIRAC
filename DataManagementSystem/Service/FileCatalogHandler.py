@@ -485,7 +485,7 @@ class FileCatalogHandler( RequestHandler ):
     """
     return gFileCatalogDB.dmeta.findDirectoriesByMetadata ( metaDict, path, self.getRemoteCredentials() )
 
-  types_findFilesByMetadata = [ DictType, StringTypes ]
+  types_findFilesByMetadata = [ list( StringTypes ) + [ListType], StringTypes ]
   def export_findFilesByMetadata( self, metaDict, path = '/' ):
     """ Find all the files satisfying the given metadata set
     """

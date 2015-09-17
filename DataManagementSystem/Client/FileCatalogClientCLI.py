@@ -1646,9 +1646,10 @@ File Catalog Client $Revision: 1.17 $Date:
     elif path[0] != '/':
       path = self.getPath(path)
 
-    path = path.rstrip( '/' )
-    if path[0] == '/' and path[1] == '/':
-      path = path[1:]
+    if path != '/':
+      path = path.rstrip( '/' )
+      if path[0] == '/' and path[1] == '/':
+        path = path[1:]
       
     if not dirFlag:
       # Have to decide if it is a file or not
@@ -1870,7 +1871,7 @@ File Catalog Client $Revision: 1.17 $Date:
     path = argss[0]
     path = self.getPath(path)
     del argss[0]
- 
+    
     if argss:
       if argss[0][0] == '{':
         metaDict = eval(argss[0])
@@ -1879,6 +1880,7 @@ File Catalog Client $Revision: 1.17 $Date:
         if not result['OK']:
           print "Illegal metaQuery:", ' '.join(argss), result['Message']
           return
+        metaDict = result['Value']
     else:
       metaDict = {}    
     if verbose: print "Query:",metaDict

@@ -52,10 +52,7 @@ class CassandraHandler:
     return S_OK( metaDict )
   
   def setMeta(self, table, metaName, metaValue, type, id):
-    if table == "files":
-      idFieldName = "fileid"
-    else:
-      idFieldName = "dirid"
+    idFieldName = self.__getIdField(table)
     
     # getting rid of quotes
     if metaValue[0] == "'" or metaValue[0] == '"':
@@ -71,10 +68,7 @@ class CassandraHandler:
     return S_OK()
   
   def rmMeta(self,table, metaName, id):
-    if table == "files":
-      idFieldName = "fileid"
-    else:
-      idFieldName = "dirid"
+    idFieldName = self.__getIdField(table)
     
     req = "DELETE %s FROM %s WHERE %s = %s" % (metaName, table, idFieldName, id)
     try:
@@ -83,13 +77,10 @@ class CassandraHandler:
       return S_ERROR(e)
     return S_OK()
   
-  def getMeta(self, table, dirIDsString, metaList):
-    if table == "files":
-      idFieldName = "fileid"
-    else:
-      idFieldName = "dirid"
+  def getMeta(self, table, IDsString, metaList):
+    idFieldName = self.__getIdField(table)
       
-    req = "select %s from %s where %s in (%s)" % (",".join(metaList), table, idFieldName, dirIDsString)
+    req = "select %s from %s where %s in (%s)" % (",".join(metaList), table, idFieldName, IDsString)
     try: 
       rows = self.cassandra.execute(req)
     except Exception, e:
@@ -97,6 +88,21 @@ class CassandraHandler:
     return S_OK([dict._asdict() for dict in rows ])
   
   
-  
+  def find(self, table, queryString):
+    idFieldName = self.__getIdField(table)
+    
+    req = "select %s from %s where %s" %(idFieldName, table, queryString)
+    print req
+    try:
+      rows = self.cassandra.execute(req)
+    except Exception, e:
+      return S_ERROR(e)
+    return S_OK([fileid for ])
+    
+  def __getIdField(self, table):
+    if table == "files":
+      return "fileid"
+    else:
+      return "dirid"
   
   

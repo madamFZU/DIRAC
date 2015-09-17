@@ -19,6 +19,7 @@ import DIRAC.Core.Utilities.Time as Time
 
 import json
 import copy
+from string import maketrans
 
 FILE_STANDARD_METAKEYS = { 'SE': 'VARCHAR',
                            'CreationDate': 'DATETIME',
@@ -63,6 +64,8 @@ OPOSITES =          {'=' : '!=',
 #TODO: probably change this
 DEFAULT_TYPE = "String"
 
+TRANSLATETAB = maketrans("[]", "()")
+
 class MetaQuery( object ):
 
   # helper construct to translate operator to function
@@ -90,6 +93,7 @@ class MetaQuery( object ):
     self.__metaTypeDict = {}
     if typeDict is not None:
       self.__metaTypeDict = typeDict
+      pprint(self.__metaTypeDict)
       
     self.compareFunct = {'eq' : self.do_eq, 
                   '!=': self.do_neq,
@@ -97,7 +101,6 @@ class MetaQuery( object ):
                   '>=': self.do_ge,
                   '<' : self.do_lt,
                   '<=': self.do_le}
-      
   
   def loadQueryList(self, queryList):
     """ Load a new query list  without loosing the metaTypeDict
@@ -233,7 +236,13 @@ class MetaQuery( object ):
         if isinstance(mDict, dict):
           out += "%s %s %s " % (meta, str(mDict.keys()[0]), str(mDict[mDict.keys()[0]]))
         else:
-          out += "%s = %s " % (meta, str(mDict))
+          if self.__metaTypeDict and self.__metaTypeDict[meta] in ['STRING', 'varchar', 'VARCHAR(128)']:
+            out += "%s = '%s'" % (meta,mDict)
+          else:
+            out += "%s = %s " % (meta, str(mDict))
+        if '[' in out: 
+          # translate '=' to 'in'
+          out = out.translate(TRANSLATETAB)
     return out
 
   def applyQuery( self, userMetaDict ):

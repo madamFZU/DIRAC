@@ -1,16 +1,16 @@
 ########################################################################
 # $HeadURL$
 ########################################################################
-
 """ DIRAC FileCatalog mix-in class to manage directory metadata
 """
-
 __RCSID__ = "$Id$"
 
 import os, types
 from pprint import pprint
-from DIRAC import S_OK, S_ERROR
+from copy import deepcopy
+from DIRAC import S_OK, S_ERROR, gLogger
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities import queryTime
+from DIRAC.DataManagementSystem.Client.MetaQuery import MetaQuery
 from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import CassandraHandler
 
 class DirectoryMetadata:
@@ -243,7 +243,12 @@ class DirectoryMetadata:
         and for all the parent directories if inherited flag is True. Get also the non-indexed
         metadata parameters.
     """
-
+    result = self.db.dtree.existsDir( path )
+    if not result['OK']:
+      return result
+    elif not result['Value']['Exists']:
+      return S_ERROR("Directory %s doesn't exist" % path)
+    
     result = self.db.dtree.getPathIDs( path )
     if not result['OK']:
       return result
@@ -492,95 +497,117 @@ class DirectoryMetadata:
       return S_ERROR( 'Conflict in the directory metadata hierarchy' )
     else:
       return S_OK( result['Value'][0][0] )
+    
+  def __dirCollidesWithQuery(self, queryDict, dirMeta, metaList):
+    missing = [key for key in metaList if key not in dirMeta.keys()]
+    tmpQuery = deepcopy(queryDict)
+    for key in missing: tmpQuery[key] = 'Missing'
+    mq = MetaQuery(tmpQuery)
+    return mq.applyQuery(dirMeta)
+    
 
+  def __findAllSubdirsByMeta(self, queryDictIn, dirID):
+    queryDict = deepcopy(queryDictIn)
+    if queryDict:
+      result = self.nosql.getMeta('dirs', dirID, queryDict.keys())
+      if not result['OK']:
+        return S_ERROR('Unable to connect to NoSQL:' + result['Message'])
+      
+      # check if the current dir has defined any relevant metadata
+      dirMeta = {}
+      if result['Value']:
+        dirMeta = { key : val for key,val in result['Value'][0].items() if val != None }
+         
+      if dirMeta:
+        # making sure MetaQuery doesn't take missing metadata as a problem
+        metaList = result['Value'][0].keys()
+        res = self.__dirCollidesWithQuery(queryDict, dirMeta, metaList)
+        if not res['OK']:
+          return res
+        if res['Value'] == False:
+          return S_OK([])
+        # Directory does satisfy the metaquery
+        # Filter out the part of Query satisfied by the path dir
+        for key in dirMeta.keys(): 
+          queryDict.pop(key)
+          
+      result = self.db.dtree.getChildren(int(dirID))
+      if result['OK']:
+        if queryDict:
+          outList = []
+        else:
+          outList = [str(dirID)]
+        for curID in result['Value']:
+          res = self.__findAllSubdirsByMeta(queryDict, curID )
+          if res['OK']:
+            if res['Value']:
+              outList.extend(res['Value'])
+          else:
+            gLogger.error(res['Message'])
+    
+    else: # no queryDict left
+      result = self.db.dtree.getSubdirectoriesByID(int(dirID))
+      if result['OK'] and result['Value']:
+        outList = [str(res) for res in result['Value'].keys()]
+        outList.append(str(dirID))
+      else:
+        outList = [str(dirID)]
+    return S_OK(outList)
+    
   @queryTime
-  def findDirIDsByMetadata( self, queryDict, path, credDict ):
+  def findDirIDsByMetadata( self, queryDictIn, path, credDict ):
     """ Find Directories satisfying the given metadata and being subdirectories of 
         the given path
+        :return Empty S_OK when no dir satisfies the query, else returns ALL the dirs satisfying the query
     """
-    pathDirList = []
-    pathDirID = 0
-    pathString = '0'
-    if path != '/':
-      result = self.db.dtree.getPathIDs( path )
-      if not result['OK']:
-        #as result[Value] is already checked in getPathIDs
-        return result
-      pathIDs = result['Value']
-      pathDirID = pathIDs[-1]
-      pathString = ','.join( [ str( x ) for x in pathIDs ] )
-
-    result = self.__expandMetaDictionary( queryDict, credDict )
+    queryDict = deepcopy(queryDictIn)
+    mq = MetaQuery(queryDict)
+    
+    result = self.getDirectoryMetadata(path, credDict)
+    if not result['OK']:
+      return S_ERROR('Problem with connectiong to the database')
+    allDirMeta = result['Value']
+    typeDict = result['MetadataType']
+    if allDirMeta:
+      res = mq.applyQuery(result['Value'])
+      if not res['OK']:
+        return S_ERROR('Failed to apply query to path:' + res['Message'] )
+      if res['Value'] == True: # if the first dir satisfies the MQ, return all subdirs
+        result = self.db.dtree.findDir( path )
+        if not result['OK']:
+          return S_ERROR('Unable to get dir ID for dir ' + path)
+        dirID = result['Value']
+        result = self.db.dtree.getSubdirectoriesByID(int(dirID))
+        if result['Value']:
+          outList = [str(res) for res in result['Value'].keys()]
+          outList.append(str(dirID))
+        else:
+          outList = [str(dirID)] 
+        return S_OK(outList)
+      else: # check if the directory meta doesn't collide with the MQ
+        dirMeta = { key : val for key,val in allDirMeta.items() if val != None }
+        res = self.__dirCollidesWithQuery(queryDict, dirMeta, typeDict.keys())
+        if not res['OK']:
+          return res
+        if res['Value'] == False:
+          return S_OK([])
+    
+    # Filtering the query for only directory metadata
+    typeDict.pop('dirid')
+    toPop = []
+    for key in queryDict.keys():
+      if key not in typeDict.keys():
+        toPop.append(key)
+    for key in toPop: queryDict.pop(key)
+    
+    result = self.db.dtree.findDir( path )
+    if not result['OK']:
+      return S_ERROR('Unable to get dir ID for dir ' + path)
+    result = self.__findAllSubdirsByMeta(queryDict, str(result['Value']))
     if not result['OK']:
       return result
-    metaDict = result['Value']
-
-    # Now check the meta data for the requested directory and its parents
-    finalMetaDict = dict( metaDict )
-    for meta in metaDict.keys():
-      result = self.__checkDirsForMetadata( meta, metaDict[meta], pathString )
-      if not result['OK']:
-        return result
-      elif result['Value'] is not None:
-        # Some directory in the parent hierarchy is already conforming with the
-        # given metadata, no need to check it further 
-        del finalMetaDict[meta]
-
-    if finalMetaDict:
-      pathSelection = ''
-      if pathDirID:
-        result = self.db.dtree.getSubdirectoriesByID( pathDirID, includeParent = True, requestString = True )
-        if not result['OK']:
-          return result
-        pathSelection = result['Value']
-      dirList = []
-      first = True
-      for meta, value in finalMetaDict.items():
-        if value == "Missing":
-          result = self.__findSubdirMissingMeta( meta, pathSelection )
-        else:
-          result = self.__findSubdirByMeta( meta, value, pathSelection )
-        if not result['OK']:
-          return result
-        mList = result['Value']
-        if first:
-          dirList = mList
-          first = False
-        else:
-          newList = []
-          for d in dirList:
-            if d in mList:
-              newList.append( d )
-          dirList = newList
-    else:
-      if pathDirID:
-        result = self.db.dtree.getSubdirectoriesByID( pathDirID, includeParent = True )
-        if not result['OK']:
-          return result
-        pathDirList = result['Value'].keys()
-
-    finalList = []
-    dirSelect = False
-    if finalMetaDict:
-      dirSelect = True
-      finalList = dirList
-      if pathDirList:
-        finalList = list( set( dirList ) & set( pathDirList ) )
-    else:
-      if pathDirList:
-        dirSelect = True
-        finalList = pathDirList
-    result = S_OK( finalList )
-
-    if finalList:
-      result['Selection'] = 'Done'
-    elif dirSelect:
-      result['Selection'] = 'None'
-    else:
-      result['Selection'] = 'All'
-
-    return result
-
+    return S_OK(result['Value'])
+    
   @queryTime
   def findDirectoriesByMetadata( self, queryDict, path, credDict ):
     """ Find Directory names satisfying the given metadata and being subdirectories of 

@@ -1,6 +1,7 @@
 ########################################################################
 # $HeadURL$
 ########################################################################
+from DataManagementSystem.Client.MetaQuery import MetaQuery
 
 """ DIRAC FileCatalog plugin class to manage file metadata. This contains only
     non-indexed metadata for the moment.
@@ -517,12 +518,32 @@ class FileMetadata:
     return S_OK( fileList )
 
   @queryTime
-  def findFilesByMetadata( self, metaDict, path, credDict, extra = False ):
+  def findFilesByMetadata( self, metaList, path, credDict, extra = False ):
     """ Find Files satisfying the given metadata
     """
     if not path:
       path = '/'
-
+      
+    for metaDict in metaList:
+      result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
+      if not result['OK']:
+        return result
+      if not result['Value']:
+        return S_OK([])
+      dirList = result['Value']
+      print dirList
+      
+      result = self.getFileMetadataFields( credDict )
+      if not result['OK']:
+        return result
+      fileMetaKeys = result['Value'].keys()
+      fileMetaDict = dict( item for item in metaDict.items() if item[0] in fileMetaKeys )
+      
+      mq = MetaQuery(fileMetaDict, result['Value'])
+      print type(mq.prettyPrintMetaQuery())
+      result = self.nosql.find("files", mq.prettyPrintMetaQuery())
+    return S_ERROR('Under developement file')  
+    #---------- OLD -------------------
     # 1.- Get Directories matching the metadata query
     result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
     if not result['OK']:
