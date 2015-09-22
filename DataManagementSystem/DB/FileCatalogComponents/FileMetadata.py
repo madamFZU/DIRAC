@@ -58,17 +58,17 @@ class FileMetadata:
         return S_ERROR( 'Attempt to add an existing metadata with different type: %s/%s' %
                         ( ptype, result['Value'][pname] ) )
 
-    return self.nosql.addField("files", pname, ptype)
+    return self.nosql.addField("file", pname, ptype)
     
   def deleteMetadataField( self, pname, credDict ):
     """ Remove metadata field
     """
-    return self.nosql.rmField("files", pname)
+    return self.nosql.rmField("file", pname)
 
   def getFileMetadataFields( self, credDict ):
     """ Get all the defined metadata fields
     """
-    return self.nosql.getMetadataFields("files")
+    return self.nosql.getMetadataFields("file")
     
 ###########################################################
 #
@@ -93,12 +93,11 @@ class FileMetadata:
       return S_ERROR( 'File %s not found' % path )
 
     for metaName, metaValue in metadict.items():
-      if not metaName in metaFields:
-        return S_ERROR("MetaField not found")
-      else:
-        result = self.nosql.setMeta("files", metaName, metaValue,  metaFields[metaName], fileID)
-        if not result['OK']:
-          return S_ERROR(result['Message'])
+      #if not metaName in metaFields:
+      #  return S_ERROR("MetaField not found")
+      result = self.nosql.setMeta("file", metaName, metaValue,  metaFields[metaName], fileID)
+      if not result['OK']:
+        return S_ERROR(result['Message'])
     return S_OK()
 
   def removeMetadata( self, path, metadata, credDict ):
@@ -107,7 +106,6 @@ class FileMetadata:
     result = self.getFileMetadataFields( credDict )
     if not result['OK']:
       return result
-    metaFields = result['Value']
 
     result = self.db.fileManager._findFiles( [path] )
     if not result['OK']:
@@ -117,11 +115,11 @@ class FileMetadata:
     else:
       return S_ERROR( 'File %s not found' % path )
 
-    failedMeta = {}
     for meta in metadata:
-      result = self.nosql.rmMeta("files", meta, fileID)
+      result = self.nosql.rmMeta("file", meta, fileID)
       if not result['OK']:
-        return S_ERROR(result['Message'])
+        print "returning error"
+        return result
     return S_OK()
 
   def __getFileID( self, path ):
@@ -196,15 +194,14 @@ class FileMetadata:
       return result
     fileID = result['Value']
 
-    metaDict = {}
-    metaList = metaTypeDict.keys()
-    result = self.nosql.getMeta("files", fileID, metaList)
+    result = self.nosql.getAllMeta("file", str(fileID))
     if not result['OK']:
       return result
     if not result['Value']:
       return S_OK()
     metaDict = result['Value'][0]
-    metaDict.pop('fileid')
+    pprint(result)
+    metaDict.pop('id')
     
     result = S_OK( dict( metaDict ) )
     result['MetadataType'] = metaTypeDict
@@ -514,7 +511,7 @@ class FileMetadata:
     for row in result['Value']:
       fileID = row[0]
       fileList.append( fileID )
-
+    
     return S_OK( fileList )
 
   @queryTime
@@ -525,23 +522,53 @@ class FileMetadata:
       path = '/'
       
     for metaDict in metaList:
+      # TODO: maybe when no dir meta is suplied, don't list all the dirs, only make a flag
+      
       result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
       if not result['OK']:
         return result
       if not result['Value']:
+        print "No value -> no directory satisfies"
         return S_OK([])
       dirList = result['Value']
-      print dirList
+      notDirMeta = result['RemainingMeta']
+      print "dirlist ", dirList
       
       result = self.getFileMetadataFields( credDict )
       if not result['OK']:
         return result
       fileMetaKeys = result['Value'].keys()
+      # check if all non-dir meta is file meta
+      undefinedMeta = [meta for meta in notDirMeta if meta not in fileMetaKeys]
+      pprint(undefinedMeta)
+      if undefinedMeta:
+        return S_ERROR('Undefined metafields: ' + ",".join(undefinedMeta))
+      
+      typeDict = result['Value']
       fileMetaDict = dict( item for item in metaDict.items() if item[0] in fileMetaKeys )
       
-      mq = MetaQuery(fileMetaDict, result['Value'])
-      print type(mq.prettyPrintMetaQuery())
-      result = self.nosql.find("files", mq.prettyPrintMetaQuery())
+      # if no unsatisfied metadata are found, return all files in the sub-tree
+      if not fileMetaDict:
+        print "Getting all files!"
+        pprint(self.db.dtree.getFileLFNsInDirectoryByDirectory( dirList, credDict ))
+        return S_ERROR('Under developement all files')
+      
+      result = self.nosql.find("file", fileMetaDict, typeDict)
+      if not result['OK']:
+        return result
+      fileIdSet = result['Value']
+    #TODO: do this for a disjuction!!!
+    if not fileIdSet:
+      return S_OK( [] )
+    
+    req = "SELECT FileID FROM FC_Files WHERE FileID in (%s) AND DirID in (%s)" % (",".join([str(fid) for fid in fileIdSet]), ",".join([str(did) for did in dirList]))
+    result = self.db._query( req )
+    if not result['OK']:
+      return result
+    if not result['Value']:
+      return S_OK( [] )
+    
+    pprint(result)
     return S_ERROR('Under developement file')  
     #---------- OLD -------------------
     # 1.- Get Directories matching the metadata query

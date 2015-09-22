@@ -49,17 +49,17 @@ class DirectoryMetadata:
         return S_ERROR( 'Attempt to add an existing metadata with different type: %s/%s' %
                         ( ptype, result['Value'][pname] ) )
 
-    return self.nosql.addField("dirs", pname, ptype)
+    return self.nosql.addField("dir", pname, ptype)
 
   def deleteMetadataField( self, pname, credDict ):
     """ Remove metadata field
     """
-    return self.nosql.rmField("dirs", pname)
+    return self.nosql.rmField("dir", pname)
 
   def getMetadataFields( self, credDict ):
     """ Get all the defined metadata fields
     """
-    return self.nosql.getMetadataFields("dirs")
+    return self.nosql.getMetadataFields("dir")
 
   def addMetadataSet( self, metaSetName, metaSetDict, credDict ):
     """ Add a new metadata set with the contents from metaSetDict
@@ -143,14 +143,14 @@ class DirectoryMetadata:
     metadataTypeDict = dirmeta['MetadataType']
 
     for metaName, metaValue in metadict.items():
-      if not metaName in metadataTypeDict:
-        return S_ERROR("MetaField not found")
+      #if not metaName in metadataTypeDict:
+      #  return S_ERROR("MetaField not found")
       # Check that the metadata is not defined for the parent directories
       if metaName in dirmeta['Value']:
         return S_ERROR( 'Metadata conflict detected for %s for directory %s' % ( metaName, dpath ) )
       # Change the DB record
       print "type: " +  metadataTypeDict[metaName]
-      result =  self.nosql.setMeta("dirs", metaName, metaValue, metadataTypeDict[metaName], dirID)
+      result =  self.nosql.setMeta("dir", metaName, metaValue, metadataTypeDict[metaName], dirID)
       if not result['OK']:
         return result
       
@@ -173,7 +173,7 @@ class DirectoryMetadata:
 
     failed = []
     for meta in metadata:
-      result = self.nosql.rmMeta("dirs", meta, dirID)
+      result = self.nosql.rmMeta("dir", meta, dirID)
       if not result['OK']:
         failed.append(meta)
     
@@ -270,18 +270,19 @@ class DirectoryMetadata:
     pathString = ','.join( [ str( x ) for x in pathIDs ] )
 
     metaList = metaFields.keys()
-    result = self.nosql.getMeta("dirs", pathString, metaList)
+    result = self.nosql.getAllMeta("dir", pathString)
     if not result['OK']:
       return result
     rows = result['Value']
     
+    pprint(rows)
     for row in rows:
-      if int(row['dirid']) == dirID:
+      if int(row['id']) == dirID:
         ownerProp = 'OwnMetadata'
       else:
         ownerProp = 'ParentMetadata'
       
-      row.pop('dirid')
+      row.pop('id')
       for key in row.keys():
         if row[key] == None:
           continue
@@ -502,14 +503,16 @@ class DirectoryMetadata:
     missing = [key for key in metaList if key not in dirMeta.keys()]
     tmpQuery = deepcopy(queryDict)
     for key in missing: tmpQuery[key] = 'Missing'
+    print "tmpQuery ",str(dirMeta)
     mq = MetaQuery(tmpQuery)
     return mq.applyQuery(dirMeta)
     
 
   def __findAllSubdirsByMeta(self, queryDictIn, dirID):
+    #print "call with %s on %s" %(str(queryDictIn), str(dirID))
     queryDict = deepcopy(queryDictIn)
     if queryDict:
-      result = self.nosql.getMeta('dirs', dirID, queryDict.keys())
+      result = self.nosql.getDirMeta(dirID, queryDict.keys())
       if not result['OK']:
         return S_ERROR('Unable to connect to NoSQL:' + result['Message'])
       
@@ -522,6 +525,7 @@ class DirectoryMetadata:
         # making sure MetaQuery doesn't take missing metadata as a problem
         metaList = result['Value'][0].keys()
         res = self.__dirCollidesWithQuery(queryDict, dirMeta, metaList)
+        #pprint(res)
         if not res['OK']:
           return res
         if res['Value'] == False:
@@ -568,8 +572,9 @@ class DirectoryMetadata:
       return S_ERROR('Problem with connectiong to the database')
     allDirMeta = result['Value']
     typeDict = result['MetadataType']
+    remainingMeta = [meta for meta in queryDict.keys() if meta not in typeDict.keys()]
     if allDirMeta:
-      res = mq.applyQuery(result['Value'])
+      res = mq.applyQuery(allDirMeta)
       if not res['OK']:
         return S_ERROR('Failed to apply query to path:' + res['Message'] )
       if res['Value'] == True: # if the first dir satisfies the MQ, return all subdirs
@@ -583,6 +588,7 @@ class DirectoryMetadata:
           outList.append(str(dirID))
         else:
           outList = [str(dirID)] 
+        print "Returning all subdirs"
         return S_OK(outList)
       else: # check if the directory meta doesn't collide with the MQ
         dirMeta = { key : val for key,val in allDirMeta.items() if val != None }
@@ -590,10 +596,11 @@ class DirectoryMetadata:
         if not res['OK']:
           return res
         if res['Value'] == False:
+          print "COLISION!!"
           return S_OK([])
     
+    print "Continuing"
     # Filtering the query for only directory metadata
-    typeDict.pop('dirid')
     toPop = []
     for key in queryDict.keys():
       if key not in typeDict.keys():
@@ -604,9 +611,8 @@ class DirectoryMetadata:
     if not result['OK']:
       return S_ERROR('Unable to get dir ID for dir ' + path)
     result = self.__findAllSubdirsByMeta(queryDict, str(result['Value']))
-    if not result['OK']:
-      return result
-    return S_OK(result['Value'])
+    result['RemainingMeta'] = remainingMeta
+    return result
     
   @queryTime
   def findDirectoriesByMetadata( self, queryDict, path, credDict ):

@@ -1604,6 +1604,11 @@ File Catalog Client $Revision: 1.17 $Date:
       if "FailedMetadata" in result:
         for meta,error in result['FailedMetadata']:
           print meta,';',error
+      return
+          
+    if 'Value' in result and result['Value']['Failed']:
+      for path,msg in result['Value']['Failed'].items():
+        print "Removing meta from %s failed. (%s)" %(path, msg)
      
   def setMeta(self,argss):
     """ Set metadata value for a directory
@@ -1883,7 +1888,9 @@ File Catalog Client $Revision: 1.17 $Date:
         metaDict = result['Value']
     else:
       metaDict = {}    
-    if verbose: print "Query:",metaDict
+    if verbose: 
+      print "Query:" 
+      pprint(metaDict)
 
     result = self.fc.findFilesByMetadata(metaDict,path)
     if not result['OK']:
@@ -2607,21 +2614,14 @@ File Catalog Client $Revision: 1.17 $Date:
     """Test method to try out metaquery parsing
     """
     metaDict = self.__createQuery(args)
-    r = self.__createQuery("A=1 OR B=3")
-    metaDict2 = r['Value']
+    if not metaDict['OK']:
+      print metaDict['Message']
+      return
+    pprint(metaDict['Value'])
     
     if metaDict['OK']:
       mq = MetaQuery(metaDict['Value'], {'Meta1':'integer', 'Meta2':'float'})
       print mq.prettyPrintMetaQuery()
-      res = mq.combineWithMetaQuery(metaDict2)
-      if res['OK']:
-        mq = res['Value']
-        print MetaQuery(mq).prettyPrintMetaQuery()
-      else:
-        print res['Message']
-    else:
-      print metaDict['Message']
-    return
 
   def do_stats( self, args ):
     """ Get the catalog statistics

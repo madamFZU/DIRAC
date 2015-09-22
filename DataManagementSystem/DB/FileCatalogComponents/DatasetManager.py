@@ -675,7 +675,7 @@ class DatasetManager:
       out = S_OK( out )
       if result['Value']['Failed']:
         out['Failed'] = result['Value']['Failed']
-      # TODO: FUNISH
+      # TODO: FINISH
       return out
 
 
