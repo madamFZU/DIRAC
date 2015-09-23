@@ -2016,7 +2016,10 @@ File Catalog Client $Revision: 1.17 $Date:
       self.dataset_overlap( argss )
     elif command == "replicate":
       self.dataset_replicate( argss )
-
+    else:
+      print "Unknown command"
+      print self.do_meta.__doc__
+      return
   def dataset_add( self, argss ):
     """ Add a new dataset
     """
