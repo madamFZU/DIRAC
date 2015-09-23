@@ -2039,7 +2039,7 @@ File Catalog Client $Revision: 1.17 $Date:
     result = self.__createQuery(metaSelections)
     if result['OK']:
       # FIXME: remove the transformation from list to dict once ready
-      metaDict = result['Value'][0]
+      metaDict = result['Value']
     else:
       print result['Message']
       return

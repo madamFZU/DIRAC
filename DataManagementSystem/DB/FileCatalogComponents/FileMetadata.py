@@ -1,14 +1,11 @@
 ########################################################################
 # $HeadURL$
 ########################################################################
-from DataManagementSystem.Client.MetaQuery import MetaQuery
-
 """ DIRAC FileCatalog plugin class to manage file metadata. This contains only
     non-indexed metadata for the moment.
 """
 
 __RCSID__ = "$Id$"
-
 from pprint import pprint
 from types import IntType, ListType, LongType, DictType, StringTypes, FloatType
 from DIRAC import S_OK, S_ERROR
@@ -118,7 +115,7 @@ class FileMetadata:
     for meta in metadata:
       result = self.nosql.rmMeta("file", meta, fileID)
       if not result['OK']:
-        print "returning error"
+        # print "returning error"
         return result
     return S_OK()
 
@@ -200,7 +197,7 @@ class FileMetadata:
     if not result['Value']:
       return S_OK()
     metaDict = result['Value'][0]
-    pprint(result)
+    # pprint(result)
     metaDict.pop('id')
     
     result = S_OK( dict( metaDict ) )
@@ -513,7 +510,55 @@ class FileMetadata:
       fileList.append( fileID )
     
     return S_OK( fileList )
-
+  
+  def __findFilesForQueryDict(self,path, metaDict, credDict):
+    # TODO: maybe when no dir meta is suplied, don't list all the dirs, only make a flag
+    
+    # if only path is specified
+    if not metaDict:
+      result = self.db.dtree.findDir( path )
+      if not result['OK']:
+        return result
+      dirID = result['Value']
+      return self.db.dtree.getFileLFNsInDirectoryByDirectory( dirID, credDict )
+      
+    result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
+    if not result['OK']:
+      return result
+    if not result['Value']:
+      # print "No value -> no directory satisfies"
+      return S_OK([])
+    dirList = result['Value']
+    notDirMeta = result['RemainingMeta']
+    #print "dirlist ", dirList
+    
+    result = self.getFileMetadataFields( credDict )
+    if not result['OK']:
+      return result
+    fileMetaKeys = result['Value'].keys()
+    # check if all non-dir meta is file meta
+    undefinedMeta = [meta for meta in notDirMeta if meta not in fileMetaKeys]
+    if undefinedMeta:
+      return S_ERROR('Undefined metafields: ' + ",".join(undefinedMeta))
+    
+    typeDict = result['Value']
+    fileMetaDict = dict( item for item in metaDict.items() if item[0] in fileMetaKeys )
+    
+    # if no unsatisfied metadata are found, return all files in the sub-tree
+    if not fileMetaDict:
+      # print "Getting all files!"
+      return self.db.dtree.getFileLFNsInDirectoryByDirectory( dirList, credDict )
+    
+    result = self.nosql.find("file", fileMetaDict, typeDict)
+    if not result['OK']:
+      return result
+    fileIdSet = result['Value']
+    #pprint(fileIdSet)
+    if not fileIdSet: out = S_OK( [] )
+    else: out = S_OK(fileIdSet)
+    out['dirList'] = dirList
+    return out
+    
   @queryTime
   def findFilesByMetadata( self, metaList, path, credDict, extra = False ):
     """ Find Files satisfying the given metadata
@@ -521,55 +566,45 @@ class FileMetadata:
     if not path:
       path = '/'
       
+    sets = []
+    done = []
+    dirList = []
+    idList = []
+    
     for metaDict in metaList:
-      # TODO: maybe when no dir meta is suplied, don't list all the dirs, only make a flag
-      
-      result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
+      if 'Path' in metaDict:
+        path = metaDict['Path']
+      result = self.__findFilesForQueryDict(path, metaDict, credDict)
+      #pprint(result)
+      if not result['OK']:
+        return result
+      if 'LFNIDList' in result:
+        done.extend(result['LFNIDList'])
+      else:
+        sets.extend(result['Value'])
+        dirList.extend(result['dirList'])
+    
+    fileIdSet = set.union(set(sets))
+    dirSet = set(dirList)
+    if fileIdSet and dirSet:
+      req = "SELECT FileID FROM FC_Files WHERE FileID in (%s) AND DirID in (%s)" % (",".join([str(fid) for fid in fileIdSet]), ",".join([str(did) for did in dirSet]))
+      result = self.db._query( req )
       if not result['OK']:
         return result
       if not result['Value']:
-        print "No value -> no directory satisfies"
-        return S_OK([])
-      dirList = result['Value']
-      notDirMeta = result['RemainingMeta']
-      print "dirlist ", dirList
+        return S_OK( [] )
+      #pprint([fid[0] for fid in result['Value']])
+      idList = [str(fid[0]) for fid in result['Value']]
       
-      result = self.getFileMetadataFields( credDict )
-      if not result['OK']:
-        return result
-      fileMetaKeys = result['Value'].keys()
-      # check if all non-dir meta is file meta
-      undefinedMeta = [meta for meta in notDirMeta if meta not in fileMetaKeys]
-      pprint(undefinedMeta)
-      if undefinedMeta:
-        return S_ERROR('Undefined metafields: ' + ",".join(undefinedMeta))
-      
-      typeDict = result['Value']
-      fileMetaDict = dict( item for item in metaDict.items() if item[0] in fileMetaKeys )
-      
-      # if no unsatisfied metadata are found, return all files in the sub-tree
-      if not fileMetaDict:
-        print "Getting all files!"
-        pprint(self.db.dtree.getFileLFNsInDirectoryByDirectory( dirList, credDict ))
-        return S_ERROR('Under developement all files')
-      
-      result = self.nosql.find("file", fileMetaDict, typeDict)
-      if not result['OK']:
-        return result
-      fileIdSet = result['Value']
-    #TODO: do this for a disjuction!!!
-    if not fileIdSet:
-      return S_OK( [] )
-    
-    req = "SELECT FileID FROM FC_Files WHERE FileID in (%s) AND DirID in (%s)" % (",".join([str(fid) for fid in fileIdSet]), ",".join([str(did) for did in dirList]))
-    result = self.db._query( req )
+    idList.extend(done)
+    result = self.db.fileManager._getFileLFNs( idList )
     if not result['OK']:
       return result
-    if not result['Value']:
-      return S_OK( [] )
-    
-    pprint(result)
-    return S_ERROR('Under developement file')  
+    if 'Successful' not in result['Value']:
+      return S_OK([])
+    out =  S_OK([name for name in result['Value']['Successful'].values()])
+    out['LFNIDDict'] = result['Value']['Successful']
+    return out
     #---------- OLD -------------------
     # 1.- Get Directories matching the metadata query
     result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )

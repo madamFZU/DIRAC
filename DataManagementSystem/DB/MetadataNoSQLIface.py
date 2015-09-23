@@ -20,7 +20,7 @@ types = ['int', 'float', 'timestamp', 'string']
 
 class CassandraHandler:
   def __init__(self):
-    print "NoSQL init"
+    print "NoSQL module initialized"
     cluster = Cluster(['147.231.25.99'])
     try:
       self.cassandra =  cluster.connect(KEYSPACE)
@@ -84,6 +84,7 @@ class CassandraHandler:
   def setMeta(self, table, metaName, metaValue, typ, idNum):
     idFieldName = self.__getIdField(table)
     
+    self.rmMeta(table, metaName, idNum)
     # getting rid of quotes
     if metaValue[0] == "'" or metaValue[0] == '"':
       metaValue = metaValue[1:-1]
@@ -113,7 +114,6 @@ class CassandraHandler:
     if not res['Value']:
       return S_ERROR("Meta not set for specified " + table)
     if metaName not in res['Value'][0]:
-      print "bing!!!"
       return S_ERROR("Meta %s not found for specified %s" % (metaName, table))
     val = res['Value'][0][metaName]
     typ = res['TypeDict'][metaName]
@@ -126,10 +126,10 @@ class CassandraHandler:
     if table == "dir":
       reqDir = "DELETE %s FROM dirmeta WHERE dirid = %s" % (metaName, idNum)
     try:
-      print req % (table, typ, idFieldName, idFieldName, idNum, metaName, val)
+      # print req % (table, typ, idFieldName, idFieldName, idNum, metaName, val)
       self.cassandra.execute(req % (table, typ, idFieldName, idFieldName, idNum, metaName, val))
       if reqDir:
-        print reqDir
+        # print reqDir
         self.cassandra.execute(reqDir)
     except Exception, e:
       return S_ERROR(e)
@@ -211,7 +211,7 @@ class CassandraHandler:
         typ = 'string'
         val = "'" + val + "'"
         
-      print req % (idFieldName, table, typ, metaName, op, val)
+      # print req % (idFieldName, table, typ, metaName, op, val)
       rows = self.cassandra.execute(req % (idFieldName, table, typ, metaName, op, val))
       if not rows:
         continue

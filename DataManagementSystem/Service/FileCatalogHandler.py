@@ -588,7 +588,7 @@ class FileCatalogHandler( RequestHandler ):
 #
 #  Dataset manipulation methods
 #
-  types_addDataset = [ StringTypes, DictType, BooleanType ]
+  types_addDataset = [ StringTypes, ListType, BooleanType ]
   def export_addDataset( self, datasetName, metaQuery, frozen ):
     """ Add a new dynamic dataset defined by its meta query
     """

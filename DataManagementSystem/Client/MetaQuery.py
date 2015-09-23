@@ -93,7 +93,6 @@ class MetaQuery( object ):
     self.__metaTypeDict = {}
     if typeDict is not None:
       self.__metaTypeDict = typeDict
-      pprint(self.__metaTypeDict)
       
     self.compareFunct = {'eq' : self.do_eq, 
                   '!=': self.do_neq,
@@ -119,7 +118,7 @@ class MetaQuery( object ):
         :returns array of parsed literals for the setMetaQuery function
     """
     operators = ['>','<','!','=',',',')','(']
-    allowed = ['/']
+    allowed = ['/','.']
     tokens = []
     nextStr = ""
     
@@ -236,7 +235,7 @@ class MetaQuery( object ):
         if isinstance(mDict, dict):
           out += "%s %s %s " % (meta, str(mDict.keys()[0]), str(mDict[mDict.keys()[0]]))
         else:
-          if self.__metaTypeDict and self.__metaTypeDict[meta] in ['STRING', 'varchar', 'VARCHAR(128)']:
+          if self.__metaTypeDict and meta in self.__metaTypeDict and self.__metaTypeDict[meta] in ['STRING', 'varchar', 'VARCHAR(128)']:
             out += "%s = '%s'" % (meta,mDict)
           else:
             out += "%s = %s " % (meta, str(mDict))
@@ -272,9 +271,11 @@ class MetaQuery( object ):
     
     for conj in self.__metaQueryList:
       for meta, value in conj.items():
+        #print "meta %s value %s" % (meta, str(value))
         conjRes = True
         # Check if user dict contains all the requested meta data
         userValue = userMetaDict.get( meta, None )
+        #print "userValue ", userValue
         if userValue is None:
           if str( value ).lower() == 'missing':
             continue
@@ -296,6 +297,7 @@ class MetaQuery( object ):
   
         # Get parsed values 
         for operation, operand in getOperands( value ):
+          #print "operation %s and operand %s" % (operation, operand)
           try:
             if isinstance( operand, list ):
               typedValue = [ getTypedValue( x, mtype ) for x in operand ]
@@ -317,9 +319,10 @@ class MetaQuery( object ):
           
           else: # value is not a list
             if not self.compareFunct[operation](userValue,typedValue):
+              #print "applied + false"
               conjRes = False
               break
-      
+            #print "applied + true"
       if conjRes:
         return S_OK( True )
 
@@ -365,6 +368,7 @@ class MetaQuery( object ):
   def __convertToDNF(self,inputList,negGlobal=False):
     out = []
     termTmp = []
+    newTerm = []
     last = []
     conjBuff = [] # buffer for storing intermediate conjunction 
     neg = negGlobal
@@ -372,8 +376,6 @@ class MetaQuery( object ):
     i = 0
     while i < len(inputList):
       atom = inputList[i]
-      #print "atom %s " % atom
-      #pprint(conjBuff)
       # cut out the correct bracket and send it down in recursion
       if atom == '(':
         iLocal = i +1
@@ -462,13 +464,18 @@ class MetaQuery( object ):
     
     # adding the last part
     if termTmp:
+      #print "termTmp ", termTmp, " newTerm ", newTerm, " last ", last, " conjBuff", conjBuff
       newTerm = self.__parseTerm(termTmp)
       if newTerm == None:
         return S_ERROR('Wrong term syntax: ' + ' '.join(termTmp))
     else:
       newTerm = []
     
-    if not conjBuff:
+    if not conjBuff and last:
+      out.extend(last)
+      if newTerm:
+        out.append(newTerm)
+    elif not conjBuff:
       if newTerm:
         out.append(newTerm)
       elif last:
@@ -540,7 +547,7 @@ class MetaQuery( object ):
   def __addToConj(self,conj,newTerm):
     """ Add another term to temporary conjunction buffer
     """
-
+    #print "call conj: %s newTerm %s" % (conj, newTerm) 
     out = []
     if not conj:
       return newTerm
@@ -555,6 +562,15 @@ class MetaQuery( object ):
           out.append(tmp)
         # the two conjunctions overlap
         else:
+          resDict = {}
+          # preserve keys that are not in commonKeys
+          for key,value in itemOld.items():
+            if key not in commonKeys:
+              resDict[key] = value
+          for key,value in itemNew.items():
+            if key not in commonKeys:
+              resDict[key] = value
+          
           for key in commonKeys:
             lDict = itemOld[key]
             rDict = itemNew[key]
@@ -648,6 +664,7 @@ class MetaQuery( object ):
                     out.append( { key : { lKey:lVal, rKey:rVal }} )
                   else:
                     out.append(rDict)
+                  done = True
                   
               elif lKey == '>' or lKey == '>=':
                 
@@ -688,5 +705,8 @@ class MetaQuery( object ):
                 lVal, rVal = rVal, lVal
               elif not done: # and tried
                 raise RuntimeError("__addToConj error, combination" + MetaQuery(itemNew).prettyPrintMetaQuery() + " with " + MetaQuery(itemOld).prettyPrintMetaQuery() +". not supported, please contact developer")
-                
+          # merge with non-common keys
+          if resDict:
+            out[-1].update(resDict)   
+    #print "Returning: ", out
     return out      

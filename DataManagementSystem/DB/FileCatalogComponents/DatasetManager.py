@@ -90,6 +90,7 @@ class DatasetManager:
       return result
     uid, gid = result['Value']
 
+    #pprint(metaQuery)
     result = self.__getMetaQueryParameters( metaQuery, credDict )
     if not result['OK']:
       return result
@@ -192,7 +193,7 @@ class DatasetManager:
 
     gLogger.info( "Annotating datasets with ID: ", str( dsIDs ) )
     req = "REPLACE FC_DatasetAnnotations (DatasetID,Annotation) VALUE %s" % values
-    print req
+    # print req
     result = self.db._update( req )
     
     if not result['OK']:
@@ -201,32 +202,6 @@ class DatasetManager:
       return S_ERROR( "%d of %d datasets was not annotated" % ( numDs - result['Value'], numDs ) )
     else:
       return S_OK()
-
-
-
-#    datasetID = result['Value']['ID']
-#
-#    connection = self.__getConnection()
-#    successful = {}
-#    result = self._findDatasets( datasets.keys(), connection )
-#    if not result['OK']:
-#      return result
-#    failed = result['Value']['Failed']
-#    datasetDict = result['Value']['Successful']
-#    if not datasetDict:
-#      result['OK'] = False
-#      result['Message'] = "No such datasets found: " + str( datasets.keys() )
-#      return  result
-#    for dataset, annotation in datasets.items():
-#      if dataset in datasetDict:
-#        req = "REPLACE FC_DatasetAnnotations (Annotation,DatasetID) VALUE ('%s',%d)" % (annotation,datasetDict[dataset]['DatasetID'])
-#        result = self.db._update( req, connection)
-#        if not result['OK']:
-#          failed[dataset] = "Failed to add annotation"
-#        else:
-#          successful[dataset] = True
-#
-#    return S_OK( {'Successful':successful, 'Failed':failed} )
 
   def rmDatasetAnnotation( self, datasetName, credDict ):  # ok
     result = self.__getDatasetID( datasetName )
@@ -259,12 +234,14 @@ class DatasetManager:
       req = "SELECT FileID FROM FC_MetaDatasetFiles WHERE FileID IN (%s) GROUP BY FileID HAVING Count(*)=1" % inside
       result = self.db._query( req )
       if not result['OK']:
-        gLogger.warn( 'Selecting files from a frozen dataset failed' )
+        gLogger.warn( 'Selecting files to delete from a frozen dataset failed' )
         return result
-      fileIDs = [int( fid[0] ) for fid in result['Value']]
-      res = self.db.fileManager._getFileLFNs( fileIDs )
-      if not res['OK']:
-        return res
+      if result['Value']:
+        fileIDs = [int( fid[0] ) for fid in result['Value']]
+        pprint( fileIDs)
+        res = self.db.fileManager._getFileLFNs( fileIDs )
+        if not res['OK']:
+          return res
 
     req = ""
     for table in ["FC_MetaDatasets", "FC_DatasetAnnotations", "FC_MetaDatasetFiles"]:
@@ -366,29 +343,6 @@ class DatasetManager:
 
     return self.db._transaction( reqs )
 
-
-
-
-    # old implementation
-
-#    if changeDict is None:
-#      result = self.checkDataset( datasetName, credDict )
-#      if not result['OK']:
-#        return result
-#      if not result['Value']:
-#        # The dataset is not changed
-#        return S_OK()
-#      else:
-#        changeDict = result['Value']
-#
-#    req = "UPDATE FC_MetaDatasets SET "
-#    for field in changeDict:
-#      req += "%s='%s', " % ( field, str( changeDict[field] ) )
-#    req += "ModificationDate=UTC_TIMESTAMP() "
-#    req += "WHERE DatasetName='%s'" % datasetName
-#    result = self.db._update( req )
-#    return result
-
   def showDatasets( self, datasetName, long_, every, credDict ):  # ok
     """ Get information about existing datasets
     """
@@ -454,35 +408,6 @@ class DatasetManager:
       else:
         dirDict[dirID] = result['Value']
     return dirDict[dirID]
-# # old implementation
-#    parameterList = ['DatasetID','MetaQuery','DirID','TotalSize','NumberOfFiles',
-#                     'UID','GID','Status','CreationDate','ModificationDate',
-#                     'DatasetHash','Mode','DatasetName']
-#    parameterString = ','.join( self._parameterList.append( 'DatasetName' ) )
-#
-#    req = "SELECT %s FROM FC_MetaDatasets" % parameterString
-#    if type( datasetName ) in StringTypes:
-#      dsName = os.path.basename(datasetName)
-#      if '*' in dsName:
-#        dName = dsName.replace( '*', '%' )
-#        req += " WHERE DatasetName LIKE '%s'" % dName
-#      elif dsName:
-#        req += " WHERE DatasetName='%s'" % dsName
-#    elif type( datasetName ) == ListType:
-#      dsNames = [ os.path.basename(d) for d in datasetName ]
-#      datasetString = stringListToString( dsNames )
-#      req += " WHERE DatasetName in (%s)" % datasetString
-#
-#    result = self.db._query( req )
-#    if not result['OK']:
-#      return result
-#
-#    resultDict = {}
-#    for row in result['Value']:
-#      dName = row[12]
-#      resultDict[dName] = self.__getDatasetDict( row )
-#
-#    return S_OK( resultDict )
 
   def getDatasetsInDirectory( self, dirID, verbose = False, connection = False ):  # ok
     """ Get datasets in the given directory
@@ -532,17 +457,6 @@ class DatasetManager:
       datasets[dsName]['dsDict'] = dsDict
 
     return S_OK( datasets )
-
-# # old implementation, can be deleted
-#    if verbose and datasets:
-#      result = self.getDatasetAnnotation( datasets.keys() )
-#      if result['OK']:
-#        for dataset in result['Value']['Successful']:
-#          datasets[dataset]['Annotation'] = result['Value']['Successful'][dataset]
-#        for dataset in result['Value']['Failed']:
-#          datasets[dataset]['Annotation'] = result['Value']['Failed'][dataset]
-#
-#    return S_OK( datasets )
 
   def getDatasetParameters( self, datasetName, credDict ):  # ok
     """ Get the currently stored dataset parameters
@@ -715,7 +629,7 @@ class DatasetManager:
       return S_ERROR( "Freezing a dataset with no files" )
 
     # getting the string of new values, that will be inserted
-    valueString = ','.join( ['(%d,%d)' % ( dsID, fileID ) for fileID in result['FileIDList']] )
+    valueString = ','.join( ['(%d,%s)' % ( dsID, fileID ) for fileID in result['FileIDList']] )
 
     req = "INSERT INTO FC_MetaDatasetFiles (DatasetID,FileID) VALUES %s" % valueString
     result = self.db._update( req )
@@ -836,7 +750,7 @@ class DatasetManager:
           return S_OK( result['Value']['LFNList'] )
 
       else:  # statuses are different
-        self.__compareMetaqueries( dsDicts[datasetNames[0]]['MetaQ'], dsDicts[datasetNames[1]]['MetaQ'] )
+        combinedMeta = self.__compareMetaqueries( dsDicts[datasetNames[0]]['MetaQ'], dsDicts[datasetNames[1]]['MetaQ'] )
         # check, if there can be any same files in both datasets
         if not combinedMeta:
           return S_OK()
@@ -849,9 +763,9 @@ class DatasetManager:
         frozenIndex = 0 if status in ['Frozen', 'Static'] else 1
         result = self.__getFrozenDatasetFiles( dsDicts[datasetNames[frozenIndex]]['ID'] )
         if not result['OK']:
-          # maybe add some error message here?
           return result
         filesFrozen = result['Value']
+        
         # modulate the ++frozenIndex with two to get the other index (0 -> 1, 1 -> 0)
         dynamicID = dsDicts[datasetNames[( frozenIndex + 1 ) % 2]]['ID']
         dynamicMeta = dsDicts[datasetNames[( frozenIndex + 1 ) % 2]]['MetaQ']
@@ -902,7 +816,10 @@ class DatasetManager:
     """
     # making dict from string
     metaQuery = eval( MetaQ )
+    if not isinstance(metaQuery, list):
+      metaQuery = [metaQuery]
     result = self.__getMetaQueryParameters( metaQuery, credDict )
+    # pprint(result)
     if not result['OK']:
       return result
     if not result['Value']:
@@ -982,17 +899,19 @@ class DatasetManager:
     return resultDict
 
 
-  def __getMetaQueryParameters( self, metaQuery, credDict ):  # OK-ish
+  def __getMetaQueryParameters( self, findMetaQuery, credDict ): 
     """ Get parameters ( hash, total size, number of files ) for the given metaquery
     """
-    findMetaQuery = dict( metaQuery )
-
-    path = '/'
-    if "Path" in findMetaQuery:
-      path = findMetaQuery['Path']
-      findMetaQuery.pop( 'Path' )
-
-    result = self.db.fmeta.findFilesByMetadata( findMetaQuery, path, credDict, extra=True )
+    # Workaround for compatibility with old datasets. Can be removed once all the datasets are created 
+    # using the new MetaQuery class (23.9.2015)
+    if not isinstance(findMetaQuery, list):
+      if isinstance(findMetaQuery, dict):
+        findMetaQuery = [findMetaQuery]
+      else:
+        return S_ERROR("Meta query not instance of dictionary nor list")
+      
+      
+    result = self.db.fmeta.findFilesByMetadata( findMetaQuery, '/', credDict, extra=True )
     if not result['OK']:
       return S_ERROR( 'Failed to apply the metaQuery' )
     if not result['Value']:
@@ -1007,10 +926,12 @@ class DatasetManager:
         for f in fList:
           lfnList.append(dir_+'/'+f)
 
-    lfnIDDict = result.get( 'LFNIDDict', {} )
     lfnIDList = result.get( 'LFNIDList', [] )
     if not lfnIDList:
-      lfnIDList = lfnIDDict.keys()
+      result = self.db.fileManager._findFileIDs( lfnList )
+      if not result['OK']:
+        return result
+      lfnIDList = result['Value']['Successful'].values()
     lfnList.sort()
 
     myMd5 = md5.md5()
