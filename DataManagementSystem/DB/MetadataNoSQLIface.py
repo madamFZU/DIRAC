@@ -8,6 +8,7 @@ from DIRAC import S_OK, S_ERROR
 from cassandra.cluster import Cluster
 from pprint import pprint
 import cassandra
+from __builtin__ import str
 
 KEYSPACE = 'fcii'
 
@@ -90,10 +91,15 @@ class CassandraHandler:
       metaValue = metaValue[1:-1]
     reqDir = ""
     
-    if typ in ['STRING', 'VARCHAR(128)', 'varchar', 'string', 'timestamp']:
+    if typ in ['STRING', 'VARCHAR(128)', 'varchar', 'string']:
       typ = 'string'
       req = "UPDATE %s_%s SET %s = %s + {%s} WHERE metaname = '%s' and value = '%s'" % (table, typ, idFieldName, idFieldName, idNum, metaName, metaValue)
       if table == "dir": reqDir = "UPDATE dirmeta SET %s = '%s' WHERE dirid = %s" % ( metaName, metaValue, idNum)
+    elif typ == 'timestamp':
+      if self.__isInt( metaValue ):
+        req = "UPDATE %s_%s SET %s = %s + {%s} WHERE metaname = '%s' and value = %s" % (table, typ, idFieldName, idFieldName, idNum, metaName, metaValue)
+      else:
+        req = "UPDATE %s_%s SET %s = %s + {%s} WHERE metaname = '%s' and value = '%s'" % (table, typ, idFieldName, idFieldName, idNum, metaName, metaValue)
     else:
       req = "UPDATE %s_%s SET %s = %s + {%s} WHERE metaname = '%s' and value = %s" % (table, typ, idFieldName, idFieldName, idNum, metaName, metaValue)
       if table == "dir": reqDir = "UPDATE dirmeta SET %s = %s WHERE dirid = %s" % ( metaName, metaValue, idNum)
@@ -138,6 +144,8 @@ class CassandraHandler:
     return S_OK()
   
   def getAllMeta(self, table, IDsString):
+    # TODO: if table == 'dir' koukat do dirMeta, ne do vsech dir_int atd.
+    
     idFieldName = self.__getIdField(table)
     
     req = "select metaname, value from %s_%s where %s contains %s"
@@ -147,7 +155,9 @@ class CassandraHandler:
     for idNum in IDsString.split(","):
       for typ in types: 
         try:
+          #print req % (table, typ, idFieldName, idNum)
           rows = self.cassandra.execute(req % (table, typ, idFieldName, idNum))
+          #pprint(rows)
         except Exception, e:
           return S_ERROR(e)
         
@@ -156,7 +166,10 @@ class CassandraHandler:
           rowDict['id'] = idNum
         for row in rows:
           row = row._asdict()
-          rowDict[row['metaname']] = row['value']
+          if typ == 'float':
+            rowDict[row['metaname']] = float("{0:.5f}".format(row['value']))
+          else:
+            rowDict[row['metaname']] = row['value']
           typeDict[row['metaname']] = typ
         
       if rowDict:
@@ -178,6 +191,7 @@ class CassandraHandler:
     
     # only one record per dirid
     row = rows[0]
+    pprint(rows)
     outDict = {}
     for i in range(0,len(metaList)): outDict[metaList[i]] = row[i]
 
@@ -211,7 +225,7 @@ class CassandraHandler:
         typ = 'string'
         val = "'" + val + "'"
         
-      # print req % (idFieldName, table, typ, metaName, op, val)
+      #print req % (idFieldName, table, typ, metaName, op, val)
       rows = self.cassandra.execute(req % (idFieldName, table, typ, metaName, op, val))
       if not rows:
         continue
@@ -226,5 +240,12 @@ class CassandraHandler:
       return "fileid"
     else:
       return "dirid"
+    
+  def __isInt(self, intstr):
+    try:
+      int(intstr)
+      return True
+    except ValueError:
+      return False
   
   

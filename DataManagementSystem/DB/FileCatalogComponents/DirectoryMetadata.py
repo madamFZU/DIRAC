@@ -149,7 +149,7 @@ class DirectoryMetadata:
       if metaName in dirmeta['Value']:
         return S_ERROR( 'Metadata conflict detected for %s for directory %s' % ( metaName, dpath ) )
       # Change the DB record
-      print "type: " +  metadataTypeDict[metaName]
+      #print "type: " +  metadataTypeDict[metaName]
       result =  self.nosql.setMeta("dir", metaName, metaValue, metadataTypeDict[metaName], dirID)
       if not result['OK']:
         return result

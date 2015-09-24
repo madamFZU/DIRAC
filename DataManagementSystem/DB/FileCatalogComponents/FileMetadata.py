@@ -192,12 +192,12 @@ class FileMetadata:
     fileID = result['Value']
 
     result = self.nosql.getAllMeta("file", str(fileID))
+    #pprint(result)
     if not result['OK']:
       return result
     if not result['Value']:
       return S_OK()
     metaDict = result['Value'][0]
-    # pprint(result)
     metaDict.pop('id')
     
     result = S_OK( dict( metaDict ) )
@@ -235,196 +235,11 @@ class FileMetadata:
 
     return self.__getFileMetaParameters( fileID, credDict )
 
-  def __transformMetaParameterToData( self, metaname ):
-    """ Relocate the meta parameters of all the directories to the corresponding
-        indexed metadata table
-    """
-
-    req = "SELECT FileID,MetaValue from FC_FileMeta WHERE MetaKey='%s'" % metaname
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-    if not result['Value']:
-      return S_OK()
-
-    insertValueList = []
-    for fileID, meta in result['Value']:
-      insertValueList.append( "( %d,'%s' )" % ( fileID, meta ) )
-
-    req = "INSERT INTO FC_FileMeta_%s (FileID,Value) VALUES %s" % ( metaname, ', '.join( insertValueList ) )
-    result = self.db._update( req )
-    if not result['OK']:
-      return result
-
-    req = "DELETE FROM FC_FileMeta WHERE MetaKey='%s'" % metaname
-    result = self.db._update( req )
-    return result
-
 #########################################################################
 #
 #  Finding files by metadata
 #
 #########################################################################
-
-  def __createMetaSelection( self, value ):
-    ''' Create selection string to be used in the SQL query
-    '''
-    queryList = []
-    if isinstance( value, FloatType ):
-      queryList.append( ( '=', '%f' % value ) )
-    elif isinstance( value, ( IntType, LongType ) ):
-      queryList.append( ( '=', '%d' % value ) )
-    elif isinstance( value, StringTypes ):
-      if value.lower() == 'any':
-        queryList.append( ( 'IS', 'NOT NULL' ) )
-      elif value.lower() == 'missing':
-        queryList.append( ( 'IS', 'NULL' ) )
-      elif value:
-        result = self.db._escapeString( value )
-        if not result['OK']:
-          return result
-        eValue = result['Value']
-        if '*' in eValue or '?' in eValue:
-          eValue = eValue.replace( '*', '%%' )
-          eValue = eValue.replace( '?', '_' )
-          queryList.append( ( 'LIKE', eValue ) )
-        else:
-          queryList.append( ( '=', eValue ) )
-      else:
-        queryList.append( ( '', '' ) )
-    elif isinstance( value, ListType ):
-      if not value:
-        queryList.append( ( '', '' ) )
-      else:
-        result = self.db._escapeValues( value )
-        if not result['OK']:
-          return result
-        query = '( $s )' % ', '.join( result['Value'] )
-        queryList.append( ( 'IN', query ) )
-    elif isinstance( value, DictType ):
-      for operation, operand in value.items():
-
-        # Prepare the escaped operand first
-        if isinstance( operand, ListType ):
-          result = self.db._escapeValues( operand )
-          if not result['OK']:
-            return result
-          escapedOperand = ', '.join( result['Value'] )
-        elif isinstance( operand, ( IntType, LongType ) ):
-          escapedOperand = '%d' % operand
-        elif isinstance( operand, FloatType ):
-          escapedOperand = '%f' % operand
-        else:
-          result = self.db._escapeString( operand )
-          if not result['OK']:
-            return result
-          escapedOperand = result['Value']
-
-        # Treat the operations
-        if operation in ['>', '<', '>=', '<=']:
-          if isinstance( operand, ListType ):
-            return S_ERROR( 'Illegal query: list of values for comparison operation' )
-          else:
-            queryList.append( ( operation, escapedOperand ) )
-        elif operation == 'in' or operation == "=":
-          if isinstance( operand, ListType ):
-            queryList.append( ( 'IN', '( %s )' % escapedOperand ) )
-          else:
-            queryList.append( ( '=', escapedOperand ) )
-        elif operation == 'nin' or operation == "!=":
-          if isinstance( operand, ListType ):
-            queryList.append( ( 'NOT IN', '( %s )' % escapedOperand ) )
-          else:
-            queryList.append( ( '!=', escapedOperand ) )
-
-    return S_OK( queryList )
-
-  def __buildSEQuery( self, storageElements ):
-    """  Return a tuple with table and condition to locate files in a given SE
-    """
-    if not storageElements:
-      return S_OK( [] )
-
-    seIDList = []
-    for se in storageElements:
-      seID = self.db.seNames.get( se, -1 )
-      if seID == -1:
-        return S_ERROR( 'Unknown SE %s' % se )
-      seIDList.append( seID )
-    table = 'FC_Replicas'
-    seString = intListToString( seIDList )
-    query = '%%s.SEID IN ( %s )' % seString
-    return S_OK( [ ( table, query ) ] )
-
-  def __buildUserMetaQuery( self, userMetaDict ):
-    """  Return a list of tuples with tables and conditions to locate files for a given user Metadata
-    """
-    if not userMetaDict:
-      return S_OK( [] )
-    resultList = []
-    leftJoinTables = []
-    for meta, value in userMetaDict.items():
-      table = 'FC_FileMeta_%s' % meta
-
-      result = self.__createMetaSelection( value )
-      if not result['OK']:
-        return result
-      for operation, operand in result['Value']:
-        resultList.append( ( table, '%%s.Value %s %s' % ( operation, operand ) ) )
-        if operand == 'NULL':
-          leftJoinTables.append( table )
-
-    result = S_OK( resultList )
-    result['LeftJoinTables'] = leftJoinTables
-    return result
-
-  def __buildStandardMetaQuery( self, standardMetaDict ):
-
-    table = 'FC_Files'
-    queriesFiles = []
-    queriesFileInfo = []
-    for infield, invalue in standardMetaDict.items():
-      value = invalue
-      if infield in FILES_TABLE_METAKEYS:
-        if infield == 'User':
-          value = self.db.users.get( invalue, -1 )
-          if value == '-1':
-            return S_ERROR( 'Unknown user %s' % invalue )
-        elif infield == 'Group':
-          value = self.db.groups.get( invalue, -1 )
-          if value == '-1':
-            return S_ERROR( 'Unknown group %s' % invalue )
-
-        table = 'FC_Files'
-        tableIndex = 'F'
-        field = FILES_TABLE_METAKEYS[infield]
-        result = self.__createMetaSelection( value )
-        if not result['OK']:
-          return result
-        for operation, operand in result['Value']:
-          queriesFiles.append( '%s.%s %s %s' % ( tableIndex, field, operation, operand ) )
-      elif infield in FILEINFO_TABLE_METAKEYS:
-        table = 'FC_FileInfo'
-        tableIndex = 'FI'
-        field = FILEINFO_TABLE_METAKEYS[infield]
-        result = self.__createMetaSelection( value )
-        if not result['OK']:
-          return result
-        for operation, operand in result['Value']:
-          queriesFileInfo.append( '%s.%s %s %s' % ( tableIndex, field, operation, operand ) )
-      else:
-        return S_ERROR( 'Illegal standard meta key %s' % infield )
-
-    resultList = []
-    if queriesFiles:
-      query = ' AND '.join( queriesFiles )
-      resultList.append( ( 'FC_Files', query ) )
-    if queriesFileInfo:
-      query = ' AND '.join( queriesFileInfo )
-      resultList.append( ( 'FC_FileInfo', query ) )
-
-    return S_OK( resultList )
-
 
   def __findFilesByMetadata( self, metaDict, dirList, credDict ):
     """ Find a list of file IDs meeting the metaDict requirements and belonging
@@ -582,7 +397,8 @@ class FileMetadata:
         done.extend(result['LFNIDList'])
       else:
         sets.extend(result['Value'])
-        dirList.extend(result['dirList'])
+        if 'dirList' in result:
+          dirList.extend(result['dirList'])
     
     fileIdSet = set.union(set(sets))
     dirSet = set(dirList)
@@ -597,6 +413,8 @@ class FileMetadata:
       idList = [str(fid[0]) for fid in result['Value']]
       
     idList.extend(done)
+    if not idList:
+      return S_OK([])
     result = self.db.fileManager._getFileLFNs( idList )
     if not result['OK']:
       return result

@@ -357,7 +357,7 @@ class MetaQuery( object ):
     
     # create a list of indexes of elements to delete from the metaQueryList
     toDel = list(set(toDel))
-    toDel.sort(reverse=True)
+    toDel.sort(reverse=True) 
     
     # delete
     for i in toDel:
