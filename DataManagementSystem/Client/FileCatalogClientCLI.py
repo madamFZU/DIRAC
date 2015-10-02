@@ -10,6 +10,7 @@ import os.path
 import time
 import sys
 from types  import DictType, ListType
+import unittest
 
 from DIRAC import S_OK, S_ERROR
 from DIRAC.Core.Security.ProxyInfo import getProxyInfo
@@ -2625,6 +2626,11 @@ File Catalog Client $Revision: 1.17 $Date:
     if metaDict['OK']:
       mq = MetaQuery(metaDict['Value'], {'Meta1':'integer', 'Meta2':'float'})
       print mq.prettyPrintMetaQuery()
+      
+  def do_mqUnitTest(self, args):
+
+    suite = unittest.TestLoader().loadTestsFromTestCase(TestMetaQuery)
+    unittest.TextTestRunner(verbosity=2).run(suite)
 
   def do_stats( self, args ):
     """ Get the catalog statistics
@@ -2717,4 +2723,70 @@ if __name__ == "__main__":
   if catalogs:
     print "Starting %s file catalog client", catalogs[0]
   cli.cmdloop()
-      
+  
+class TestMetaQuery(unittest.TestCase):
+  def test_parsing(self):
+    outcome = 'a = 1 '
+    mq = MetaQuery()
+    
+    mq.setMetaQuery( mq.parseQueryString('a=1') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), outcome)
+    
+    mq.setMetaQuery( mq.parseQueryString('a  =    1') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), outcome)
+
+  def test_simpleLogic(self):
+    mq = MetaQuery()
+    
+    mq.setMetaQuery( mq.parseQueryString('a>2 b=3') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a > 2 AND b = 3 ')
+    
+    mq.setMetaQuery( mq.parseQueryString('a>2 AND b=3') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a > 2 AND b = 3 ')
+    
+    mq.setMetaQuery( mq.parseQueryString('a>2 OR b=3 ') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a > 2 OR b = 3 ')
+    
+    mq.setMetaQuery( mq.parseQueryString('NOT (a>2 OR b=3)') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a <= 2 AND b != 3 ')
+
+  def test_associativity(self):
+    mq = MetaQuery()
+    
+    mq.setMetaQuery( mq.parseQueryString('A = 0 AND B > 2 OR C = 3') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'A = 0 AND B > 2 OR C = 3 ')
+    
+    mq.setMetaQuery( mq.parseQueryString('(A = 0 AND B > 2) OR C = 3') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'A = 0 AND B > 2 OR C = 3 ')
+    
+    mq.setMetaQuery( mq.parseQueryString('A = 0 AND (B > 2 OR C = 3)') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'A = 0 AND B > 2 OR A = 0 AND C = 3 ')
+    
+  def test_comutativity(self):
+    outcome = 'A = 0 AND B > 2 AND D = 4 OR A = 0 AND C = 3 AND D = 4 '
+    mq = MetaQuery()
+    
+    mq.setMetaQuery( mq.parseQueryString('A = 0 AND ( ( B > 2 OR C = 3 ) AND D  = 4 )') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), outcome)
+    
+    mq.setMetaQuery( mq.parseQueryString('D = 4 AND ( ( B > 2 OR C = 3 ) AND A  = 0 )') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), outcome)
+    
+  def test_operatorPriority(self):
+    mq = MetaQuery()
+    
+    mq.setMetaQuery( mq.parseQueryString('A = 0 AND ( B > 2 OR C = 3 AND D  = 4 )') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'A = 0 AND B > 2 OR A = 0 AND C = 3 AND D = 4 ')
+    
+  def test_optimization(self):
+    mq = MetaQuery()
+    
+    mq.setMetaQuery( mq.parseQueryString('a=1 AND b>3 AND b>2') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a = 1 AND b > 3  ')
+    
+    
+  def test_advancedCases(self):
+    mq = MetaQuery()
+    
+    mq.setMetaQuery( mq.parseQueryString('(a=0 OR b=1 OR c>2) AND ( ( c>3 AND g=6) OR e=4)') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a = 0 AND e = 4 OR b = 1 AND e = 4 OR c > 3 AND g = 6 OR c > 2 AND e = 4 ')
