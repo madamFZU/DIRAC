@@ -2784,6 +2784,11 @@ class TestMetaQuery(unittest.TestCase):
     mq.setMetaQuery( mq.parseQueryString('a=1 AND b>3 AND b>2') )
     self.assertEqual(mq.prettyPrintMetaQuery(), 'a = 1 AND b > 3  ')
     
+    mq.setMetaQuery( mq.parseQueryString('D = 4 AND ( B > 2 OR B > 3 )') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'B > 2 AND D = 4 ')
+    
+    mq.setMetaQuery( mq.parseQueryString('D = 4 AND B = 2 OR A = 1 AND C = 3') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'B = 2 AND D = 4 OR A = 1 AND C = 3 ')
     
   def test_advancedCases(self):
     mq = MetaQuery()
