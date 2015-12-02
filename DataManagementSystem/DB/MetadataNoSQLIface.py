@@ -12,31 +12,45 @@ from elasticsearch import Elasticsearch
 from elasticsearch.client import IndicesClient
 from elasticsearch import helpers
 
+# IPs of the cluster servers
 clusterIPs = ["147.231.25.99"]
 
+# name of the used index
 indexName = 'fclive'
 
-translationTypes = {"org.apache.cassandra.db.marshal.UTF8Type"      : "STRING", 
-                    "org.apache.cassandra.db.marshal.Int32Type"     : "INT", 
-                    "org.apache.cassandra.db.marshal.FloatType"     : "FLOAT",
-                    "org.apache.cassandra.db.marshal.TimestampType" : "DATE"}
+# the following two parameters should be fetched from the configuration service when in production
+# number of replicas
+NUMOFREP = 0
+#number of shards
+NUMOFSHARD = 1
 
 types = ['int', 'float', 'timestamp', 'string']
 
 
 class ESHandler:
-  def __init__(self):  
+  def __init__(self):
+    """
+    Handler constructor. Makes shure that the wanted index exists
+    """
     print "ES module initializing"
     self.es = Elasticsearch(clusterIPs)
     
     # check if indexes are in place
     ic = IndicesClient(self.es)
     if not ic.exists(index="fclive"):
-      res = ic.create(index=indexName, body={'settings': {"number_of_shards" : 1, "number_of_replicas" : 0}})
+      res = ic.create(index=indexName, body={'settings': {"number_of_shards" : NUMOFSHARD, "number_of_replicas" : NUMOFREP}})
       if not 'acknowledged' in res or not res.get('acknowledged'): gLogger.error('Cannot connect to index')
-    gLogger.info('Elasticsearch connected')
+      else: gLogger.info('Elasticsearch: index created')
+    gLogger.info('Elasticsearch ready')
 
   def addField(self, table, pname, ptype): # done
+    """
+    Add a metaname
+    :param string file/dir
+    :param string metaname
+    :param string type of metaname 
+    :return S_OK empty or S_ERROR with the exception in 'Message'
+    """
     reqDict = {}
     reqDict['use'] = self.__getUse(table)
     reqDict['metType'] = ptype
@@ -47,6 +61,12 @@ class ESHandler:
     return S_OK()
   
   def rmField(self,table, pname): # done 
+    """
+    Remove a metaname and delete all its occurences in files/dirs
+    :param string file/dir
+    :param string metaname
+    :return S_OK empty or S_ERROR with the exception in 'Message'
+    """
     use = self.__getUse(table)
 
     # get all ids with field set
@@ -72,6 +92,11 @@ class ESHandler:
     return S_OK()
   
   def getMetadataFields(self, table): # done
+    """
+    Get all available metanames for file/dir
+    :param string file/dir
+    :return S_OK with dictionary of metadata in 'Value' or S_ERROR
+    """
     
     use = self.__getUse(table)
     req = {"query": {"match" : {"use" : use } } } 
@@ -88,6 +113,15 @@ class ESHandler:
     return S_OK( metaDict )
   
   def setMeta(self, table, metaName, metaValue, typ, idNum): # done
+    """
+    Set metadata to file/dir
+    :param string file/dir
+    :param string name of the metadata
+    :param typ value of metadata
+    :param string type of metadata
+    :param int file/dir id
+    :return S_OK empty or S_ERROR with the exception in 'Message'
+    """
     use = self.__getUse(table)
     
     req = {"doc": {metaName : metaValue}, "doc_as_upsert" : True}
@@ -101,6 +135,13 @@ class ESHandler:
 
   
   def rmMeta(self,table, metaName, idNum): # done
+    """
+    Remove a metadata from a dir/file
+    :param string file/dir
+    :param string name of the metadata
+    :param int file/dir id
+    :return S_OK empty or S_ERROR with the exception in 'Message'
+    """
     use = self.__getUse(table)
     
     try:
@@ -131,6 +172,12 @@ class ESHandler:
 
   
   def getAllMeta(self, table, IDs): # done
+    """
+    Retrieve metadata from a list of ids
+    :param string file or dir
+    :param list of file/dir ids
+    :return S_OK with dictionary {meta:value} with 'id' as one of the metas in 'Value'
+    """
     
     req = {"ids" : IDs}
     use = self.__getUse(table)
@@ -160,7 +207,14 @@ class ESHandler:
   def getDirMeta(self, dirId, metaList): # done
     return S_ERROR('Using deprecated method getDirMeta')
   
-  def find(self, table, queryDict, typeDict): # TODO: 
+  def find(self, queryList, typeDict): # TODO: 
+    """
+    Find all the files satisfying the inputed metaquery
+    :param list serialized metaquery
+    :param dict dictionary of types
+    """
+      
+    
     idFieldName = self.__getIdField(table)
     
     req = "select %s from %s_%s where metaname = '%s' and value %s %s"
@@ -188,16 +242,17 @@ class ESHandler:
 # =============================== PRIVATE METHODS =================================================
   
   def __getUse(self,table):
+    """
+    Translate input to data_type
+    """
     if table == 'dir': return 'dirs'
     else: return'files'
     
-  def __getIdField(self, table):
-    if "file" in table:
-      return "fileid"
-    else:
-      return "dirid"
-    
   def __isInt(self, intstr):
+    """
+    Return when param is int
+    :param string integer in string type that needs to be checked
+    """
     try:
       int(intstr)
       return True

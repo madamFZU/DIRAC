@@ -272,44 +272,8 @@ class DirectoryMetadata:
     """ Relocate the meta parameters of all the directories to the corresponding
         indexed metadata table
     """
-
-    req = "SELECT DirID,MetaValue from FC_DirMeta WHERE MetaKey='%s'" % metaname
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-    if not result['Value']:
-      return S_OK()
-
-    dirDict = {}
-    for dirID, meta in result['Value']:
-      dirDict[dirID] = meta
-    dirList = dirDict.keys()
-
-    # Exclude child directories from the list
-    for dirID in dirList:
-      result = self.db.dtree.getSubdirectoriesByID( dirID )
-      if not result['OK']:
-        return result
-      if not result['Value']:
-        continue
-      childIDs = result['Value'].keys()
-      for childID in childIDs:
-        if childID in dirList:
-          del dirList[dirList.index( childID )]
-
-    insertValueList = []
-    for dirID in dirList:
-      insertValueList.append( "( %d,'%s' )" % ( dirID, dirDict[dirID] ) )
-
-    req = "INSERT INTO FC_Meta_%s (DirID,Value) VALUES %s" % ( metaname, ', '.join( insertValueList ) )
-    result = self.db._update( req )
-    if not result['OK']:
-      return result
-
-    req = "DELETE FROM FC_DirMeta WHERE MetaKey='%s'" % metaname
-    result = self.db._update( req )
-    return result
-  
+    return S_ERROR('Method "__transformMetaParameterToData" is deprecated')
+      
   def __findAllFilesInSubtree(self,dirID,credDict):
       """
       Return all fileIds of files in subtree under directory identified by dirID
@@ -435,59 +399,10 @@ class DirectoryMetadata:
     dirList = [ x[0] for x in result['Value'] ]
     return S_OK( dirList )
 
-  def __expandMetaDictionary( self, metaDict, credDict ):
-    """ Expand the dictionary with metadata query 
-    """
-    result = self.getMetadataFields( credDict )
-    if not result['OK']:
-      return result
-    metaTypeDict = result['Value']
-    resultDict = {}
-    extraDict = {}
-    for key, value in metaDict.items():
-      if not key in metaTypeDict:
-        #return S_ERROR( 'Unknown metadata field %s' % key )
-        extraDict[key] = value
-        continue
-      keyType = metaTypeDict[key]
-      if keyType != "MetaSet":
-        resultDict[key] = value
-      else:
-        result = self.getMetadataSet( value, True, credDict )
-        if not result['OK']:
-          return result
-        mDict = result['Value']
-        for mk, mv in mDict.items():
-          if mk in resultDict:
-            return S_ERROR( 'Contradictory query for key %s' % mk )
-          else:
-            resultDict[mk] = mv
-
-    result = S_OK( resultDict )
-    result['ExtraMetadata'] = extraDict
-    return result
-
   def __checkDirsForMetadata( self, meta, value, pathString ):
     """ Check if any of the given directories conform to the given metadata
     """
-    result = self.__createMetaSelection( meta, value, "M." )
-    if not result['OK']:
-      return result
-    selectString = result['Value']
-
-    if selectString:
-      req = "SELECT M.DirID FROM FC_Meta_%s AS M WHERE %s AND M.DirID IN (%s)" % ( meta, selectString, pathString )
-    else:
-      req = "SELECT M.DirID FROM FC_Meta_%s AS M WHERE M.DirID IN (%s)" % ( meta, pathString )
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-    elif not result['Value']:
-      return S_OK( None )
-    elif len( result['Value'] ) > 1:
-      return S_ERROR( 'Conflict in the directory metadata hierarchy' )
-    else:
-      return S_OK( result['Value'][0][0] )
+    S_ERROR('Method "__checkDirsForMetadata" is deprecated')
     
   def __dirCollidesWithQuery(self, queryDict, dirMeta, metaList):
     missing = [key for key in metaList if key not in dirMeta.keys()]
@@ -728,6 +643,38 @@ class DirectoryMetadata:
 
     return S_OK( metaDict )
 
+  def __expandMetaDictionary( self, metaDict, credDict ):
+    """ Expand the dictionary with metadata query 
+    """
+    result = self.getMetadataFields( credDict )
+    if not result['OK']:
+      return result
+    metaTypeDict = result['Value']
+    resultDict = {}
+    extraDict = {}
+    for key, value in metaDict.items():
+      if not key in metaTypeDict:
+        #return S_ERROR( 'Unknown metadata field %s' % key )
+        extraDict[key] = value
+        continue
+      keyType = metaTypeDict[key]
+      if keyType != "MetaSet":
+        resultDict[key] = value
+      else:
+        result = self.getMetadataSet( value, True, credDict )
+        if not result['OK']:
+          return result
+        mDict = result['Value']
+        for mk, mv in mDict.items():
+          if mk in resultDict:
+            return S_ERROR( 'Contradictory query for key %s' % mk )
+          else:
+            resultDict[mk] = mv
+
+    result = S_OK( resultDict )
+    result['ExtraMetadata'] = extraDict
+    return result
+
   def getCompatibleMetadata( self, queryDict, path, credDict ):
     """ Get distinct metadata values compatible with the given already defined metadata
     """
@@ -794,28 +741,19 @@ class DirectoryMetadata:
   def removeMetadataForDirectory( self, dirList, credDict ):
     """ Remove all the metadata for the given directory list
     """
-
-    failed = {}
-    successful = {}
-    dirs = dirList
-    if type( dirList ) != types.ListType:
-      dirs = [dirList]
-
-    dirListString = ','.join( [ str( d ) for d in dirs ] )
-
-    # Get the list of metadata fields to inspect
     result = self.getMetadataFields( credDict )
     if not result['OK']:
       return result
     metaFields = result['Value']
-
-    for meta in metaFields:
-      req = "DELETE FROM FC_Meta_%s WHERE DirID in ( %s )" % ( meta, dirListString )
-      result = self.db._query( req )
-      if not result['OK']:
-        failed[meta] = result['Message']
-      else:
-        successful[meta] = 'OK'
-
-    return S_OK( {'Successful':successful, 'Failed':failed} )
-
+    
+    okay = False
+    
+    if not isinstance(dirList, list): dirList = [dirList]
+    for dirId in dirList:
+        for meta in metaFields:
+            res = self.nosql.rmMeta("dir", meta, dirId)
+            if not res['OK']: gLogger.error('Unable to remove metadata %s from dir with id %d' % (meta, dirId))
+            else: okay = True
+            
+    if not okay: return S_ERROR('Unable to remova any metadata')
+    else: return S_OK()

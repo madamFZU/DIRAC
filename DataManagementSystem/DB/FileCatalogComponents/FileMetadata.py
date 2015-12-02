@@ -33,7 +33,8 @@ class FileMetadata:
 ##############################################################################
   def addMetadataField( self, pname, ptype, credDict ):
     """ Add a new metadata parameter to the Metadata Database.
-        pname - parameter name, ptype - parameter type in the MySQL notation
+        :param string parameter name 
+        :param string  parameter type 
     """
 
     if pname in FILE_STANDARD_METAKEYS:
@@ -81,13 +82,10 @@ class FileMetadata:
       return result
     metaFields = result['Value']
 
-    result = self.db.fileManager._findFiles( [path] )
-    if not result['OK']:
-      return result
-    if result['Value']['Successful']:
-      fileID = result['Value']['Successful'][path]['FileID']
-    else:
-      return S_ERROR( 'File %s not found' % path )
+    result = self.__getFileID(path)
+    if not res['OK']:
+        return res
+    fileID = res['Value']
 
     for metaName, metaValue in metadict.items():
       #if not metaName in metaFields:
@@ -104,22 +102,23 @@ class FileMetadata:
     if not result['OK']:
       return result
 
-    result = self.db.fileManager._findFiles( [path] )
-    if not result['OK']:
-      return result
-    if result['Value']['Successful']:
-      fileID = result['Value']['Successful'][path]['FileID']
-    else:
-      return S_ERROR( 'File %s not found' % path )
+    result = self.__getFileID(path)
+    if not res['OK']:
+        return res
+    fileID = res['Value']
 
     for meta in metadata:
       result = self.nosql.rmMeta("file", meta, fileID)
       if not result['OK']:
-        # print "returning error"
         return result
     return S_OK()
 
   def __getFileID( self, path ):
+    """
+    Get file ID from path
+    :param string path
+    :return S_OK with fileID in 'Value'
+    """
 
     result = self.db.fileManager._findFiles( [path] )
     if not result['OK']:
@@ -130,55 +129,20 @@ class FileMetadata:
       return S_ERROR( 'File not found' )
     return S_OK( fileID )
 
-  def __setFileMetaParameter( self, fileID, metaName, metaValue, credDict ):
-    """ Set an meta parameter - metadata which is not used in the the data
-        search operations
-    """
-    result = self.db._insert( 'FC_FileMeta',
-                          ['FileID', 'MetaKey', 'MetaValue'],
-                          [fileID, metaName, str( metaValue )] )
-    return result
-
   def setFileMetaParameter( self, path, metaName, metaValue, credDict ):
-
-    result = self.__getFileID( path )
-    if not result['OK']:
-      return result
-    fileID = result['Value']
-    return self.__setFileMetaParameter( fileID, metaName, metaValue, credDict )
+    return S_ERROR('Method "setFileMetaParameter" is deprecated')
 
   def _getFileUserMetadataByID( self, fileIDList, credDict, connection = False ):
     """ Get file user metadata for the list of file IDs
     """
-    # First file metadata
-    result = self.getFileMetadataFields( credDict )
-    if not result['OK']:
-      return result
-    metaFields = result['Value']
-
-    stringIDs = ','.join( [ '%s' % fId for fId in fileIDList ] )
-    metaDict = {}
-    for meta in metaFields:
-      req = "SELECT Value,FileID FROM FC_FileMeta_%s WHERE FileID in (%s)" % ( meta, stringIDs )
-      result = self.db._query( req, conn = connection )
-      if not result['OK']:
-        return result
-      for value, fileID in result['Value']:
-        metaDict.setdefault( fileID, {} )
-        metaDict[fileID][meta] = value
-
-    req = "SELECT FileID,MetaKey,MetaValue from FC_FileMeta where FileID in (%s)" % stringIDs
-    result = self.db._query( req, conn = connection )
-    if not result['OK']:
-      return result
-    for fileID, key, value in result['Value']:
-      metaDict.setdefault( fileID, {} )
-      metaDict[fileID][key] = value
-
-    return S_OK( metaDict )
+    return S_ERROR('Method "_getFileUserMetadataByID" is deprecated')
 
   def getFileUserMetadata( self, path, credDict ):
-    """ Get metadata for the given file
+    """ 
+    Get metadata for the given file
+    :param string path of given file
+    :param credDict
+    :return S_OK with metaDict in 'Value' + metaTypeDict in 'MetadataType'
     """
     # First file metadata
     result = self.getFileMetadataFields( credDict )
