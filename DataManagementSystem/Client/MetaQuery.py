@@ -217,7 +217,7 @@ class MetaQuery( object ):
     return json.dumps( self.__metaQueryList )
   
   def prettyPrintMetaQuery(self):
-    
+        
     orFirst = True
     out = ""
     sortedMQList = sorted( self.__metaQueryList, key=lambda k: k[sorted(k.keys())[0]] )
@@ -248,7 +248,6 @@ class MetaQuery( object ):
   def applyQuery( self, userMetaDict ):
     """  Return a list of tuples with tables and conditions to locate files for a given user Metadata
     """
-    # TODO: asd
     def getOperands( value ):
       if isinstance( value, list ):
         return [ ('=', value) ]
@@ -289,7 +288,6 @@ class MetaQuery( object ):
         mtype = self.__metaTypeDict.get(meta, 'None')
         if mtype == 'None':
           pass
-          #return S_ERROR('Cannot check type of meta')
         
         try:
           userValue = getTypedValue( userValue, mtype )
@@ -343,6 +341,9 @@ class MetaQuery( object ):
   #============================================Private Methods===============================================
   
   def __optimize(self, queryList):
+    """
+    Optimize the query, remove the duplicate elements
+    """
     mq = queryList
     toDel = []
     

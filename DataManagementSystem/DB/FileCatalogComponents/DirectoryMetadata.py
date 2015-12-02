@@ -3,6 +3,7 @@
 ########################################################################
 """ DIRAC FileCatalog mix-in class to manage directory metadata
 """
+#from DataManagementSystem.DB.test.TestFileCatalogDB import credDict
 __RCSID__ = "$Id$"
 
 import os, types
@@ -11,14 +12,17 @@ from copy import deepcopy
 from DIRAC import S_OK, S_ERROR, gLogger
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities import queryTime
 from DIRAC.DataManagementSystem.Client.MetaQuery import MetaQuery
-from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import CassandraHandler
+from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import ESHandler
 
 class DirectoryMetadata:
 
   def __init__( self, database = None ):
 
+    gLogger.info('Initializing dmeta')
     self.db = database
-    self.nosql = CassandraHandler()
+    gLogger.info('MySQL initialized')
+    self.nosql = ESHandler()
+    gLogger.info('ES initialized')
 
   def setDatabase( self, database ):
     self.db = database
@@ -143,6 +147,7 @@ class DirectoryMetadata:
     metadataTypeDict = dirmeta['MetadataType']
 
     for metaName, metaValue in metadict.items():
+   
       #if not metaName in metadataTypeDict:
       #  return S_ERROR("MetaField not found")
       # Check that the metadata is not defined for the parent directories
@@ -153,6 +158,18 @@ class DirectoryMetadata:
       result =  self.nosql.setMeta("dir", metaName, metaValue, metadataTypeDict[metaName], dirID)
       if not result['OK']:
         return result
+      
+      # set the metadata for all the files in the sub-tree
+      res = self.__findAllFilesInSubtree(dirID, credDict)
+      if not res['OK']:
+        return res
+      # set metadata for each file
+      for fileId in res['Value']:
+        res = self.nosql.setMeta("file", metaName, metaValue, metadataTypeDict[metaName], fileId)
+        if not res['OK']:
+          gLogger.error('Failed to set metaName %s for fileID %s' % (metaName,str(fileId)), res['Message'])
+        else:
+          gLogger.info('Metadata set: metaName %s for fileID %s' % (metaName,str(fileId)))
       
     return S_OK()
 
@@ -179,65 +196,23 @@ class DirectoryMetadata:
     
     if failed:
       return S_ERROR("Failed to remove metadata: " + ",".join(failed))
-    else:
-      return S_OK()
+
+    # remove metadata from all files in subtree
     
-  def setMetaParameter( self, dpath, metaName, metaValue, credDict ):
-    """ Set an meta parameter - metadata which is not used in the the data
-        search operations
-    """
-    result = self.db.dtree.findDir( dpath )
-    if not result['OK']:
-      return result
-    if not result['Value']:
-      return S_ERROR( 'Path not found: %s' % dpath )
-    dirID = result['Value']
-
-    result = self.db._insert( 'FC_DirMeta',
-                          ['DirID', 'MetaKey', 'MetaValue'],
-                          [dirID, metaName, str( metaValue )] )
-    return result
-
-  def getDirectoryMetaParameters( self, dpath, credDict, inherited = True, owndata = True ):
-    """ Get meta parameters for the given directory
-    """
-    if inherited:
-      result = self.db.dtree.getPathIDs( dpath )
-      if not result['OK']:
-        return result
-      pathIDs = result['Value']
-      dirID = pathIDs[-1]
-    else:
-      result = self.db.dtree.findDir( dpath )
-      if not result['OK']:
-        return result
-      if not result['Value']:
-        return S_ERROR( 'Path not found: %s' % dpath )
-      dirID = result['Value']
-      pathIDs = [dirID]
-
-    if len( pathIDs ) > 1:
-      pathString = ','.join( [ str( x ) for x in pathIDs ] )
-      req = "SELECT DirID,MetaKey,MetaValue from FC_DirMeta where DirID in (%s)" % pathString
-    else:
-      req = "SELECT DirID,MetaKey,MetaValue from FC_DirMeta where DirID=%d " % dirID
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-    if not result['Value']:
-      return S_OK( {} )
-    metaDict = {}
-    for _dID, key, value in result['Value']:
-      if metaDict.has_key( key ):
-        if type( metaDict[key] ) == types.ListType:
-          metaDict[key].append( value )
-        else:
-          metaDict[key] = [metaDict[key]].append( value )
-      else:
-        metaDict[key] = value
-
-    return S_OK( metaDict )
-
+    res = self.__findAllFilesInSubtree(dirID, credDict)
+    if not res['OK']:
+      return res
+    
+    for fileId in res['Value']:
+        for meta in metadata:
+          res = self.nosql.rmMeta("file", meta, fileId)
+          if not res['OK']:
+            gLogger.error('Failed to remove metaName %s for fileID %s' % (meta,str(fileId)), res['Message'])
+          else:
+            gLogger.info('Metadata remove: metaName %s for fileID %s' % (meta,str(fileId)))
+    
+    return S_OK()
+    
   def getDirectoryMetadata( self, path, credDict, inherited = True, owndata = True ):
     """ Get metadata for the given directory aggregating metadata for the directory itself
         and for all the parent directories if inherited flag is True. Get also the non-indexed
@@ -267,15 +242,14 @@ class DirectoryMetadata:
       pathIDs = pathIDs[-1:]
     if not owndata:
       pathIDs = pathIDs[:-1]
-    pathString = ','.join( [ str( x ) for x in pathIDs ] )
+    #pathString = ','.join( [ str( x ) for x in pathIDs ] )
 
     metaList = metaFields.keys()
-    result = self.nosql.getAllMeta("dir", pathString)
+    result = self.nosql.getAllMeta("dir", pathIDs)
     if not result['OK']:
       return result
     rows = result['Value']
     
-    pprint(rows)
     for row in rows:
       if int(row['id']) == dirID:
         ownerProp = 'OwnMetadata'
@@ -335,6 +309,22 @@ class DirectoryMetadata:
     req = "DELETE FROM FC_DirMeta WHERE MetaKey='%s'" % metaname
     result = self.db._update( req )
     return result
+  
+  def __findAllFilesInSubtree(self,dirID,credDict):
+      """
+      Return all fileIds of files in subtree under directory identified by dirID
+      Returned values in a list in S_OK()['Value']
+      """
+      # getting list of all files in directory subtree
+      res = self.db.dtree.getSubdirectoriesByID(dirID)
+      if not res['OK']:
+        return S_ERROR('Cannot navigate directory tree')
+      dirList = res['Value'].keys()
+      dirList.append(dirID)  
+      res = self.db.dtree.getFileLFNsInDirectoryByDirectory( dirList, credDict )
+      if not res['OK']:
+        return S_ERROR('Cannot retrieve all files in sub-tree')
+      return S_OK(res['LFNIDList'])
 
 ############################################################################################
 #
@@ -573,6 +563,7 @@ class DirectoryMetadata:
     allDirMeta = result['Value']
     typeDict = result['MetadataType']
     remainingMeta = [meta for meta in queryDict.keys() if meta not in typeDict.keys()]
+    
     if allDirMeta:
       res = mq.applyQuery(allDirMeta)
       if not res['OK']:

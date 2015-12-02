@@ -20,20 +20,21 @@ from DIRAC.DataManagementSystem.DB.FileCatalogComponents.UserAndGroupManager   i
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.DatasetManager        import DatasetManager
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities             import checkArgumentFormat
 
+from pprint import pprint
+
 #############################################################################
 class FileCatalogDB( DB ):
 
   def __init__( self, databaseLocation = 'DataManagement/FileCatalogDB' ):
     """ Standard Constructor
     """
-
     # The database location can be specified in System/Database form or in just the Database name
     # in the DataManagement system
     db = databaseLocation
     if db.find( '/' ) == -1:
       db = 'DataManagement/' + db
 
-    DB.__init__( self, 'FileCatalogDB', db )
+    DB.__init__( self, 'FileCatalogDB', db, maxQueueSize = 10 )
 
   def setConfig( self, databaseConfig ):
 
@@ -869,6 +870,7 @@ class FileCatalogDB( DB ):
       return res
     if not res['Value']['Successful']:
       return S_ERROR( 'Permission denied' )
+    
     if not res['Value']['Successful'][path]:
       return S_ERROR( 'Permission denied' )
 

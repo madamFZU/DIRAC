@@ -1617,14 +1617,20 @@ File Catalog Client $Revision: 1.17 $Date:
     if len(argss) != 3:
       print "Error: command requires 3 arguments, %d given" % len(argss)
       return
+    
     path = argss[0]
     if path == '.':
       path = self.cwd
     elif path[0] != '/':
       path = self.cwd+'/'+path  
+      
+    if path != '/':
+      path = path.rstrip( '/' )
+      
     meta = argss[1]
     value = argss[2]
     print path,meta,value
+    
     metadict = {}
     metadict[meta]=value
     result = self.fc.setMetadata(path,metadict)
@@ -2042,7 +2048,6 @@ File Catalog Client $Revision: 1.17 $Date:
     metaSelections = ' '.join( argss[start + 1:] )
     result = self.__createQuery(metaSelections)
     if result['OK']:
-      # FIXME: remove the transformation from list to dict once ready
       metaDict = result['Value']
     else:
       print result['Message']

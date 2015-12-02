@@ -14,14 +14,14 @@ from DIRAC.Core.Utilities.List import intListToString
 from DIRAC.DataManagementSystem.Client.MetaQuery import FILE_STANDARD_METAKEYS, \
                                                         FILES_TABLE_METAKEYS, \
                                                         FILEINFO_TABLE_METAKEYS
-from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import CassandraHandler
+from DIRAC.DataManagementSystem.DB.MetadataNoSQLIface import ESHandler
 
 class FileMetadata:
 
   def __init__( self, database = None ):
 
-    self.nosql = CassandraHandler()
     self.db = database
+    self.nosql = ESHandler()
 
   def setDatabase( self, database ):
     self.db = database
@@ -191,7 +191,7 @@ class FileMetadata:
       return result
     fileID = result['Value']
 
-    result = self.nosql.getAllMeta("file", str(fileID))
+    result = self.nosql.getAllMeta("file", [fileID])
     #pprint(result)
     if not result['OK']:
       return result
@@ -204,36 +204,12 @@ class FileMetadata:
     result['MetadataType'] = metaTypeDict
     return result
 
-  def __getFileMetaParameters( self, fileID, credDict ):
-
-    req = "SELECT FileID,MetaKey,MetaValue from FC_FileMeta where FileID=%d " % fileID
-    result = self.db._query( req )
-    if not result['OK']:
-      return result
-    if not result['Value']:
-      return S_OK( {} )
-    metaDict = {}
-    for fileID, key, value in result['Value']:
-      if metaDict.has_key( key ):
-        if isinstance( metaDict[key], ListType ):
-          metaDict[key].append( value )
-        else:
-          metaDict[key] = [metaDict[key]].append( value )
-      else:
-        metaDict[key] = value
-
-    return S_OK( metaDict )
 
   def getFileMetaParameters( self, path, credDict ):
     """ Get meta parameters for the given file
     """
+    return S_ERROR('Using deprecated method')
 
-    result = self.__getFileID( path )
-    if not result['OK']:
-      return result
-    fileID = result['Value']
-
-    return self.__getFileMetaParameters( fileID, credDict )
 
 #########################################################################
 #
@@ -423,6 +399,8 @@ class FileMetadata:
     out =  S_OK([name for name in result['Value']['Successful'].values()])
     out['LFNIDDict'] = result['Value']['Successful']
     return out
+  
+  
     #---------- OLD -------------------
     # 1.- Get Directories matching the metadata query
     result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
