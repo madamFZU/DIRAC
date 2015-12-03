@@ -221,7 +221,7 @@ class ESHandler:
     
     req = {"ids" : IDs}
     use = self.__getUse(table)
-    print table, IDs
+    #print table, IDs
     try:
       res = self.es.mget(index = indexName, doc_type = use, body = req)
     except Exception,e:
@@ -296,8 +296,7 @@ class ESHandler:
     findDict = deepcopy(emptyFindDict)
     findDict["query"]["filtered"]["filter"]["bool"]["should"] = disList
     
-    pprint(findDict)
-    #return S_ERROR('Under developement')
+    # pprint(findDict)
     
     try:
       # submit query

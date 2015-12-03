@@ -347,7 +347,7 @@ class FileMetadata:
           dirIDs.update(result['Value'])
       
       for dirID in dirIDs:
-        print "Getting path for dirID " , str(dirID)
+        # print "Getting path for dirID " , str(dirID)
         res = self.db.dtree.getDirectoryPath(dirID)
         if not res['OK']:
           gLogger.error('Unable to get directory path for dirID %s ' % str(dirID))
@@ -357,7 +357,6 @@ class FileMetadata:
 
     else: # searching for files
       result = self.nosql.find(metaList, typeDict)
-      pprint(result)
       if not result['OK']:
         return result
       elif result['Value']:

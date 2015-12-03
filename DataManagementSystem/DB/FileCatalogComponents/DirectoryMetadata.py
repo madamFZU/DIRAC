@@ -141,7 +141,6 @@ class DirectoryMetadata:
     dirID = result['Value']
 
     dirmeta = self.getDirectoryMetadata( dpath, credDict, owndata = False )
-    pprint(dirmeta)
     if not dirmeta['OK']:
       return dirmeta
     metadataTypeDict = dirmeta['MetadataType']
@@ -408,13 +407,13 @@ class DirectoryMetadata:
     missing = [key for key in metaList if key not in dirMeta.keys()]
     tmpQuery = deepcopy(queryDict)
     for key in missing: tmpQuery[key] = 'Missing'
-    print "tmpQuery ",str(dirMeta)
+    # print "tmpQuery ",str(dirMeta)
     mq = MetaQuery(tmpQuery)
     return mq.applyQuery(dirMeta)
     
 
   def __findAllSubdirsByMeta(self, queryDictIn, dirID):
-    print "call with %s on %s" %(str(queryDictIn), str(dirID))
+    # print "call with %s on %s" %(str(queryDictIn), str(dirID))
     queryDict = deepcopy(queryDictIn)
     if queryDict:
       result = self.nosql.getAllMeta("dir",[dirID])
@@ -462,7 +461,6 @@ class DirectoryMetadata:
         outList.append(str(dirID))
       else:
         outList = [str(dirID)]
-    print "outList " , str(outList)
     return S_OK(outList)
     
   @queryTime
@@ -496,7 +494,7 @@ class DirectoryMetadata:
           outList.append(str(dirID))
         else:
           outList = [str(dirID)] 
-        print "Returning all subdirs"
+        # print "Returning all subdirs"
         return S_OK(outList)
       
       else: # check if the directory meta doesn't collide with the MQ
@@ -505,10 +503,10 @@ class DirectoryMetadata:
         if not res['OK']:
           return res
         if res['Value'] == False:
-          print "COLISION!!"
+          # print "COLISION!!"
           return S_OK([])
     
-    print "Continuing"
+    # print "Continuing"
     # Filtering the query for only directory metadata
     toPop = []
     for key in queryDict.keys():
