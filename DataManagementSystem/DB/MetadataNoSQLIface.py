@@ -6,11 +6,16 @@ Created on Sep 8, 2015
 '''
 
 from DIRAC import S_OK, S_ERROR, gLogger
-from pprint import pprint
 from __builtin__ import str
+
 from elasticsearch import Elasticsearch
 from elasticsearch.client import IndicesClient
 from elasticsearch import helpers
+from elasticsearch.exceptions import ConnectionTimeout,TransportError
+
+from pprint import pprint
+from copy import copy,deepcopy
+from datetime import datetime
 
 # IPs of the cluster servers
 clusterIPs = ["147.231.25.99"]
@@ -24,7 +29,17 @@ NUMOFREP = 0
 #number of shards
 NUMOFSHARD = 1
 
-types = ['int', 'float', 'timestamp', 'string']
+# translation dict between DIRAC MetaQuery comparison operators and ES compatible ones
+OP2ES = { '>' : 'gt', '>=' : 'gte', '<' : 'lt', '<=' : 'lte'}
+
+# date format string
+DATEFORMAT = '%Y/%m/%dT%H:%M:%S'
+
+# types = ['int', 'float', 'timestamp', 'string']
+
+# structure of the query to be submited 
+emptyFindDict = { "fields" : ["_id"] ,  "query" : { "filtered" : { "filter" : { "bool" : { "should" : [ ] } } } } }
+
 
 
 class ESHandler:
@@ -36,9 +51,9 @@ class ESHandler:
     self.es = Elasticsearch(clusterIPs)
     
     # check if indexes are in place
-    ic = IndicesClient(self.es)
-    if not ic.exists(index="fclive"):
-      res = ic.create(index=indexName, body={'settings': {"number_of_shards" : NUMOFSHARD, "number_of_replicas" : NUMOFREP}})
+    self.ic = IndicesClient(self.es)
+    if not self.ic.exists(index="fclive"):
+      res = self.ic.create(index=indexName, body={'settings': {"number_of_shards" : NUMOFSHARD, "number_of_replicas" : NUMOFREP}})
       if not 'acknowledged' in res or not res.get('acknowledged'): gLogger.error('Cannot connect to index')
       else: gLogger.info('Elasticsearch: index created')
     gLogger.info('Elasticsearch ready')
@@ -98,8 +113,11 @@ class ESHandler:
     :return S_OK with dictionary of metadata in 'Value' or S_ERROR
     """
     
-    use = self.__getUse(table)
-    req = {"query": {"match" : {"use" : use } } } 
+    if table == 'all':
+      req = {"query": {"match_all" : {} } }
+    else:
+      use = self.__getUse(table)
+      req = {"query": {"match" : {"use" : use } } }
     
     metaDict = {}
     try:
@@ -124,7 +142,29 @@ class ESHandler:
     """
     use = self.__getUse(table)
     
-    req = {"doc": {metaName : metaValue}, "doc_as_upsert" : True}
+    if typ.lower() == 'int':
+      if not self.__isInt(metaValue):
+        return S_ERROR('Value is not int type')
+      else:
+        realVal = int(metaValue)
+    
+    elif typ.lower() == 'float':
+      if not self.__isFloat(metaValue):
+        return S_ERROR('Value is not float type')
+      else:
+        realVal = float(metaValue)
+        
+    elif typ.lower() == 'timestamp':
+      if not self.__isTimestamp(metaValue):
+        return S_ERROR('Value is not timestamp type')
+      else:
+        realVal =  datetime.strptime(metaValue, DATEFORMAT)
+      
+    else: # value is string
+      realVal = metaValue
+      
+    
+    req = {"doc": {metaName : realVal}, "doc_as_upsert" : True}
     # pprint(req)
     try:
       self.es.update( index = indexName, doc_type = use, id = idNum, body = req)
@@ -187,7 +227,7 @@ class ESHandler:
     except Exception,e:
       return S_ERROR(str(e))
     
-    pprint(res)
+    #pprint(res)
     # extract documents from result, leaving out the not found ones
     resList = []
     #try:
@@ -201,43 +241,77 @@ class ESHandler:
           
     #except Exception,e:
     #  return S_ERROR('Unable to extract result from ES: %s' % str(e))
-    pprint(resList)
+    #pprint(resList)
     return S_OK(resList)
     
   def getDirMeta(self, dirId, metaList): # done
     return S_ERROR('Using deprecated method getDirMeta')
   
-  def find(self, queryList, typeDict): # TODO: 
+  def find(self, queryList, typeDict): 
     """
     Find all the files satisfying the inputed metaquery
     :param list serialized metaquery
     :param dict dictionary of types
     """
-      
     
-    idFieldName = self.__getIdField(table)
-    
-    req = "select %s from %s_%s where metaname = '%s' and value %s %s"
-    setList = []
-    for metaName, metaDict in queryDict.items():
-      if isinstance(metaDict, dict):
-        op,val = metaDict.items()[0]
-      else:
-        op, val = '=', metaDict
-      typ = typeDict[metaName]  
-      if typ == 'varchar': 
-        typ = 'string'
-        val = "'" + val + "'"
+    disList = []
+    # convert internal representation of MQ to ES
+    for conj in queryList: # iterate over conjunctions
+      conjList = []
+      negList = []
+      for name,val in conj.items(): # iterate over conj elements
+        elDict = {}
+        if isinstance(val, dict):
+          for op,limit in val.items(): # iterate over multiple limitations
+            
+            if isinstance(limit, list):
+              if typeDict[name] == 'timestamp':
+                elDict["terms"] = { name : [datetime.strptime(it, DATEFORMAT) for it in limit]}
+              else:
+                elDict["terms"] = { name : limit}
+              if op == '=':
+                conjList.append(elDict)
+              else: # not in list
+                negList.append(elDict)
+                
+            else: # simple limit
+              if typeDict[name] == 'timestamp':
+                elDict["range"] = { name: { OP2ES[op] : datetime.strptime(limit, DATEFORMAT) } }
+              else:
+                elDict["range"] = { name: { OP2ES[op] : limit } }
+              conjList.append(elDict)
+              
+        else: # simple value
+          if typeDict[name] == 'timestamp':
+            elDict["term"] = { name : datetime.strptime(val, DATEFORMAT)}
+          else:
+            elDict["term"] = { name : val}
+          conjList.append(elDict)
         
-      #print req % (idFieldName, table, typ, metaName, op, val)
-      rows = self.cassandra.execute(req % (idFieldName, table, typ, metaName, op, val))
-      if not rows:
-        continue
-      setList.append(set(rows[0][0]))
-      
-    if not setList:
-      return S_OK([])
-    return S_OK(set.intersection(*setList))
+      innerDict = { "must" : conjList }
+      if negList: innerDict["must_not"] = negList
+      disList.append( { "bool" : innerDict } ) 
+    
+    # insert disjunction list in correct context
+    findDict = deepcopy(emptyFindDict)
+    findDict["query"]["filtered"]["filter"]["bool"]["should"] = disList
+    
+    pprint(findDict)
+    #return S_ERROR('Under developement')
+    
+    try:
+      # submit query
+      resGen = helpers.scan(self.es,index=indexName, doc_type='files', query= findDict)
+      # get results
+      resList = [res['_id'] for res in resGen]
+    except ConnectionTimeout, e:
+      return S_ERROR('Connection timeout on Elasctisearch: ' + str(e))
+    except TransportError,e:
+      return S_ERROR('Data retrieving error on Elasctisearch: ' + str(e))
+    except Exception,e:
+      return S_ERROR('Error in find operation: ' + str(e))
+
+    return S_OK(resList)
   
 # =============================== PRIVATE METHODS =================================================
   
@@ -250,11 +324,33 @@ class ESHandler:
     
   def __isInt(self, intstr):
     """
-    Return when param is int
+    Check if string can be converted to int type
     :param string integer in string type that needs to be checked
     """
     try:
       int(intstr)
+      return True
+    except ValueError:
+      return False
+    
+  def __isFloat(self, floatstr):
+    """
+    Check if string can be converted to float type
+    :param string float in string type that needs to be checked
+    """
+    try:
+      float(floatstr)
+      return True
+    except ValueError:
+      return False
+    
+  def __isTimestamp(self, dateStr):
+    """
+    Check if string can be converted to datetime type
+    :param string timestamp in string type that needs to be checked
+    """
+    try:
+      datetime.strptime(dateStr, DATEFORMAT)
       return True
     except ValueError:
       return False

@@ -1823,13 +1823,13 @@ File Catalog Client $Revision: 1.17 $Date:
     mtype = argss[1]
 
     if mtype.lower()[:3] == 'int':
-      rtype = 'INT'
+      rtype = 'int'
     elif mtype.lower()[:7] == 'varchar':
-      rtype = 'varchar'
+      rtype = 'string'
     elif mtype.lower() == 'string':
-      rtype = 'varchar'
+      rtype = 'string'
     elif mtype.lower() == 'float':
-      rtype = 'FLOAT'
+      rtype = 'float'
     elif mtype.lower() == 'date' or mtype.lower() == 'timestamp':
       rtype = 'timestamp'
     else:
@@ -1862,7 +1862,7 @@ File Catalog Client $Revision: 1.17 $Date:
   def do_find(self,args):
     """ Find all files satisfying the given metadata information 
     
-        usage: find [-q] [-D] <path> <meta_name>=<meta_value> [<meta_name>=<meta_value>]
+        usage: find [-q] [-D] <path> <metaQuery>
     """   
 
     argss = args.split()
@@ -1885,38 +1885,27 @@ File Catalog Client $Revision: 1.17 $Date:
     del argss[0]
     
     if argss:
-      if argss[0][0] == '{':
-        metaDict = eval(argss[0])
-      else:  
-        result = self.__createQuery(' '.join(argss))
-        if not result['OK']:
-          print "Illegal metaQuery:", ' '.join(argss), result['Message']
-          return
-        metaDict = result['Value']
+      result = self.__createQuery(' '.join(argss))
+      if not result['OK']:
+        print "Illegal metaQuery:", ' '.join(argss), result['Message']
+        return
+      metaList = result['Value']
     else:
-      metaDict = {}    
+      metaList = {}    
     if verbose: 
       print "Query:" 
-      pprint(metaDict)
+      pprint(metaList)
 
-    result = self.fc.findFilesByMetadata(metaDict,path)
+    metaList[0]["___dirsOnly"] = dirsOnly
+    result = self.fc.findFilesByMetadata(metaList,path)
     if not result['OK']:
       print ("Error: %s" % result['Message']) 
       return 
 
     if result['Value']:
-
-      if dirsOnly:
-        listToPrint = set( "/".join(fullpath.split("/")[:-1]) for fullpath in result['Value'] )
-      else:
-        listToPrint = result['Value']
-
-      for dir_ in listToPrint:
-        print dir_
-
+      for item in result['Value']: print item
     else:
-      if verbose:
-        print "No matching data found"      
+      print "No matching data found"      
 
     if verbose and "QueryTime" in result:
       print "QueryTime %.2f sec" % result['QueryTime']  
@@ -2115,17 +2104,6 @@ File Catalog Client $Revision: 1.17 $Date:
       print "ERROR: failed to get status of dataset:", result['Message']
     else:
       self.__printDsPropertiesTable( result['Value'] )
-#      fields = ["Key", "Value"]
-#      for name, dicti in result['Value'].items():
-#        print '\n' + name + ":"
-#        print '=' * ( len( name ) + 1 )
-#        records = {}
-#        records = [[k, str( v )] for k, v in dicti.items()]
-#        printTable( fields, records )
-
-#      parDict = result['Value']
-#      for par,value in parDict.items():
-#        print par.rjust(20),':',value
 
   def dataset_rm( self, argss ):
     """ Remove the given dataset
@@ -2213,21 +2191,7 @@ File Catalog Client $Revision: 1.17 $Date:
           records.append( [err, str( dsProps[ds][err] ), str( dsProps[ds]['new'][err] )] )
         if not none:
           printTable( labels, records )
-    return  # old implementation is next
-
-
-#    datasetName = argss[0]
-#    result = self.fc.checkDataset( datasetName )
-#    if not result['OK']:
-#      print "ERROR: failed to check dataset:", result['Message']
-#    else:
-#      changeDict = result['Value']
-#      if not changeDict:
-#        print "Dataset is not changed"
-#      else:
-#        print "Dataset changed:"
-#        for par in changeDict:
-#          print "   ",par,': ',changeDict[par][0],'->',changeDict[par][1]
+    return  
           
   def dataset_update( self, argss ):
     """ Update the given dataset parameters
@@ -2246,15 +2210,8 @@ File Catalog Client $Revision: 1.17 $Date:
       print "All datasets were already up to date"
     else:
       print "Dataset(s) updated"
-    return #old implementation is next
-
-#    datasetName = argss[0]
-#    result = self.fc.updateDataset( datasetName )
-#    if not result['OK']:
-#      print "ERROR: failed to update dataset:", result['Message']
-#    else:
-#      print "Successfully updated dataset", datasetName
-
+    return 
+  
   def dataset_freeze( self, argss ):
     """ Freeze the given dataset
     """
@@ -2338,25 +2295,6 @@ File Catalog Client $Revision: 1.17 $Date:
         print dName.replace( "//", "/" )
     else:
       self.__printDsPropertiesTable( datasetDict, True )
-#      fields = ['Key','Value']
-#      wanted = ['Status', 'MetaQuery', 'NumberOfFiles', 'Path']
-#      datasets = datasetDict.keys()
-#      dsAnnotations = {}
-#      resultAnno = self.fc.getDatasetAnnotation( datasets )
-#      if resultAnno['OK']:
-#        dsAnnotations = resultAnno['Value']['Successful']
-#      for dName in datasets:
-#        records = []
-#        print '\n'+dName+":"
-#        print '='*(len(dName)+1)
-#        for key,value in datasetDict[dName].items():
-#          if key in wanted:
-#            records.insert( 0, [key, str( value )] )
-#          else:
-#            records.append( [key, str( value )] )
-# #        if dName in dsAnnotations:
-# #          records.append( [ 'Annotation',dsAnnotations[dName] ] )
-#        printTable( fields, records )
 
   def dataset_locate(self, argss):
     usage = "Usage: dataset locate <dataset_name>"
@@ -2374,13 +2312,6 @@ File Catalog Client $Revision: 1.17 $Date:
     repDict = result['Value']['replicas']
     sizeDict = result['Value']['fileSizes']
     location = {}
-
-    # transform the replica dictionary in a se dictionary
-    # creating SE dictionary
-#    for se in result['Value']['SEs']:
-#      location[se] = {}
-#      location[se]['files'] = []
-#      location[se]['size'] = 0
 
     # populationg SE dictionary
     for rep in repDict.keys():
@@ -2617,7 +2548,7 @@ File Catalog Client $Revision: 1.17 $Date:
 
     return [self.getPath( dsName ) for dsName in argss]
   
-  # function for metaquery test parsing and other operations
+  
   # TODO: remove
   def do_mqtest(self, args):
     """Test method to try out metaquery parsing
@@ -2631,8 +2562,12 @@ File Catalog Client $Revision: 1.17 $Date:
     if metaDict['OK']:
       mq = MetaQuery(metaDict['Value'], {'Meta1':'integer', 'Meta2':'float'})
       print mq.prettyPrintMetaQuery()
-      
+  
+  # TODO: remove
   def do_mqUnitTest(self, args):
+    """
+    Method to acces MetaQuery unit test. Remove when not needed
+    """
 
     suite = unittest.TestLoader().loadTestsFromTestCase(TestMetaQuery)
     unittest.TextTestRunner(verbosity=2).run(suite)
@@ -2749,7 +2684,7 @@ class TestMetaQuery(unittest.TestCase):
     mq.setMetaQuery( mq.parseQueryString('a>2 AND b=3') )
     self.assertEqual(mq.prettyPrintMetaQuery(), 'a > 2 AND b = 3 ')
     
-    mq.setMetaQuery( mq.parseQueryString('a>2 OR b=3 ') )
+    mq.setMetaQuery( mq.parseQueryString('a>2 OR b=3') )
     self.assertEqual(mq.prettyPrintMetaQuery(), 'a > 2 OR b = 3 ')
     
     mq.setMetaQuery( mq.parseQueryString('NOT (a>2 OR b=3)') )
@@ -2787,16 +2722,13 @@ class TestMetaQuery(unittest.TestCase):
     mq = MetaQuery()
     
     mq.setMetaQuery( mq.parseQueryString('a=1 AND b>3 AND b>2') )
-    self.assertEqual(mq.prettyPrintMetaQuery(), 'a = 1 AND b > 3  ')
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a = 1 AND b > 3 ')
     
-    mq.setMetaQuery( mq.parseQueryString('D = 4 AND ( B > 2 OR B > 3 )') )
-    self.assertEqual(mq.prettyPrintMetaQuery(), 'B > 2 AND D = 4 ')
-    
-    mq.setMetaQuery( mq.parseQueryString('D = 4 AND B = 2 OR A = 1 AND C = 3') )
-    self.assertEqual(mq.prettyPrintMetaQuery(), 'B = 2 AND D = 4 OR A = 1 AND C = 3 ')
+    mq.setMetaQuery( mq.parseQueryString('A = 1 AND B = 2 OR A = 1 AND B = 2') )
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'A = 1 AND B = 2 ')
     
   def test_advancedCases(self):
     mq = MetaQuery()
     
     mq.setMetaQuery( mq.parseQueryString('(a=0 OR b=1 OR c>2) AND ( ( c>3 AND g=6) OR e=4)') )
-    self.assertEqual(mq.prettyPrintMetaQuery(), 'a = 0 AND e = 4 OR b = 1 AND e = 4 OR c > 3 AND g = 6 OR c > 2 AND e = 4 ')
+    self.assertEqual(mq.prettyPrintMetaQuery(), 'a = 0 AND e = 4 OR b = 1 AND e = 4 OR c > 2 AND e = 4 OR c > 3 AND g = 6 ')

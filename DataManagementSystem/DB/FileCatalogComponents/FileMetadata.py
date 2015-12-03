@@ -8,7 +8,7 @@
 __RCSID__ = "$Id$"
 from pprint import pprint
 from types import IntType, ListType, LongType, DictType, StringTypes, FloatType
-from DIRAC import S_OK, S_ERROR
+from DIRAC import S_OK, S_ERROR, gLogger
 from DIRAC.DataManagementSystem.DB.FileCatalogComponents.Utilities import queryTime
 from DIRAC.Core.Utilities.List import intListToString
 from DIRAC.DataManagementSystem.Client.MetaQuery import FILE_STANDARD_METAKEYS, \
@@ -82,7 +82,7 @@ class FileMetadata:
       return result
     metaFields = result['Value']
 
-    result = self.__getFileID(path)
+    res = self.__getFileID(path)
     if not res['OK']:
         return res
     fileID = res['Value']
@@ -98,11 +98,11 @@ class FileMetadata:
   def removeMetadata( self, path, metadata, credDict ):
     """ Remove the specified metadata for the given file
     """
-    result = self.getFileMetadataFields( credDict )
-    if not result['OK']:
-      return result
+    #result = self.getFileMetadataFields( credDict )
+    #if not result['OK']:
+    #  return result
 
-    result = self.__getFileID(path)
+    res = self.__getFileID(path)
     if not res['OK']:
         return res
     fileID = res['Value']
@@ -304,7 +304,7 @@ class FileMetadata:
       # print "Getting all files!"
       return self.db.dtree.getFileLFNsInDirectoryByDirectory( dirList, credDict )
     
-    result = self.nosql.find("file", fileMetaDict, typeDict)
+    result = self.nosql.find(fileMetaDict, typeDict)
     if not result['OK']:
       return result
     fileIdSet = result['Value']
@@ -318,9 +318,65 @@ class FileMetadata:
   def findFilesByMetadata( self, metaList, path, credDict, extra = False ):
     """ Find Files satisfying the given metadata
     """
+    
     if not path:
       path = '/'
       
+    dirsOnly = metaList[0].pop('___dirsOnly', False)
+    
+    # get metadata types
+    res = self.nosql.getMetadataFields('all')
+    if not res['OK']:
+      return S_ERROR('Unable to get typeDict')
+    typeDict = res['Value']
+    
+    # search only for directories -> using old method
+    if dirsOnly:
+      out = []
+      dirIDs = set([])
+      for metaDict in metaList:
+        result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
+        #pprint(result)
+        if not result['OK']:
+          return result
+        elif not result['Value']:
+          continue
+        elif result['RemainingMeta']:
+          return S_OK([])
+        else: 
+          dirIDs.update(result['Value'])
+      
+      for dirID in dirIDs:
+        print "Getting path for dirID " , str(dirID)
+        res = self.db.dtree.getDirectoryPath(dirID)
+        if not res['OK']:
+          gLogger.error('Unable to get directory path for dirID %s ' % str(dirID))
+        else:
+          #pprint(res)
+          out.append(res['Value'])
+
+    else: # searching for files
+      result = self.nosql.find(metaList, typeDict)
+      pprint(result)
+      if not result['OK']:
+        return result
+      elif result['Value']:
+        idList = result['Value']
+        
+        # get LFNs
+        result = self.db.fileManager._getFileLFNs( idList )
+        if not result['OK']:
+          return result
+        if 'Successful' not in result['Value']:
+          return S_OK([])
+        out =  [name for name in result['Value']['Successful'].values()]
+      else: # no files found
+        out = []
+    
+    return S_OK(out)
+  
+###########################################################OLD IMPLEMENTATIONA####################################################
+
     sets = []
     done = []
     dirList = []
@@ -363,58 +419,3 @@ class FileMetadata:
     out =  S_OK([name for name in result['Value']['Successful'].values()])
     out['LFNIDDict'] = result['Value']['Successful']
     return out
-  
-  
-    #---------- OLD -------------------
-    # 1.- Get Directories matching the metadata query
-    result = self.db.dmeta.findDirIDsByMetadata( metaDict, path, credDict )
-    if not result['OK']:
-      return result
-    dirList = result['Value']
-    dirFlag = result['Selection']
-
-    # 2.- Get known file metadata fields
-#     fileMetaDict = {}
-    result = self.getFileMetadataFields( credDict )
-    if not result['OK']:
-      return result
-    fileMetaKeys = result['Value'].keys() + FILE_STANDARD_METAKEYS.keys()
-    fileMetaDict = dict( item for item in metaDict.items() if item[0] in fileMetaKeys )
-
-    fileList = []
-    lfnIdDict = {}
-    lfnList = []
-
-    if dirFlag != 'None':
-      # None means that no Directory satisfies the given query, thus the search is empty
-      if dirFlag == 'All':
-        # All means that there is no Directory level metadata in query, full name space is considered
-        dirList = []
-
-      if fileMetaDict:
-        # 3.- Do search in File Metadata
-        result = self.__findFilesByMetadata( fileMetaDict, dirList, credDict )
-        if not result['OK']:
-          return result
-        fileList = result['Value']
-      elif dirList:
-        # 4.- if not File Metadata, return the list of files in given directories
-        return self.db.dtree.getFileLFNsInDirectoryByDirectory( dirList, credDict )
-      else:
-        # if there is no File Metadata and no Dir Metadata, return an empty list
-        lfnList = []
-
-    if fileList:
-      # 5.- get the LFN
-      result = self.db.fileManager._getFileLFNs( fileList )
-      if not result['OK']:
-        return result
-      lfnList = result['Value']['Successful'].values()
-      if extra:
-        lfnIdDict = result['Value']['Successful']
-
-    result = S_OK( lfnList )
-    if extra:
-      result['LFNIDDict'] = lfnIdDict
-
-    return result

@@ -148,8 +148,8 @@ class DirectoryMetadata:
 
     for metaName, metaValue in metadict.items():
    
-      #if not metaName in metadataTypeDict:
-      #  return S_ERROR("MetaField not found")
+      if not metaName in metadataTypeDict:
+        return S_ERROR("MetaField not found")
       # Check that the metadata is not defined for the parent directories
       if metaName in dirmeta['Value']:
         return S_ERROR( 'Metadata conflict detected for %s for directory %s' % ( metaName, dpath ) )
@@ -414,16 +414,17 @@ class DirectoryMetadata:
     
 
   def __findAllSubdirsByMeta(self, queryDictIn, dirID):
-    #print "call with %s on %s" %(str(queryDictIn), str(dirID))
+    print "call with %s on %s" %(str(queryDictIn), str(dirID))
     queryDict = deepcopy(queryDictIn)
     if queryDict:
-      result = self.nosql.getDirMeta(dirID, queryDict.keys())
+      result = self.nosql.getAllMeta("dir",[dirID])
       if not result['OK']:
-        return S_ERROR('Unable to connect to NoSQL:' + result['Message'])
+        return result
       
       # check if the current dir has defined any relevant metadata
       dirMeta = {}
       if result['Value']:
+        result['Value'][0].pop("id",None)
         dirMeta = { key : val for key,val in result['Value'][0].items() if val != None }
          
       if dirMeta:
@@ -461,13 +462,13 @@ class DirectoryMetadata:
         outList.append(str(dirID))
       else:
         outList = [str(dirID)]
+    print "outList " , str(outList)
     return S_OK(outList)
     
   @queryTime
   def findDirIDsByMetadata( self, queryDictIn, path, credDict ):
     """ Find Directories satisfying the given metadata and being subdirectories of 
         the given path
-        :return Empty S_OK when no dir satisfies the query, else returns ALL the dirs satisfying the query
     """
     queryDict = deepcopy(queryDictIn)
     mq = MetaQuery(queryDict)
@@ -483,6 +484,7 @@ class DirectoryMetadata:
       res = mq.applyQuery(allDirMeta)
       if not res['OK']:
         return S_ERROR('Failed to apply query to path:' + res['Message'] )
+      
       if res['Value'] == True: # if the first dir satisfies the MQ, return all subdirs
         result = self.db.dtree.findDir( path )
         if not result['OK']:
@@ -496,6 +498,7 @@ class DirectoryMetadata:
           outList = [str(dirID)] 
         print "Returning all subdirs"
         return S_OK(outList)
+      
       else: # check if the directory meta doesn't collide with the MQ
         dirMeta = { key : val for key,val in allDirMeta.items() if val != None }
         res = self.__dirCollidesWithQuery(queryDict, dirMeta, typeDict.keys())

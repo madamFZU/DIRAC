@@ -1,8 +1,8 @@
 ########################################################################
 # File: MetaQuery.py
-# Author: A.T.
+# FirstDraft: A.T.
 # Date: 24.02.2015
-# Updated: VI.2015 by M.Adam
+# Finished: VI.2015 by M.Adam
 # $HeadID$
 ########################################################################
 #from _ctypes import Array
@@ -118,7 +118,7 @@ class MetaQuery( object ):
         :returns array of parsed literals for the setMetaQuery function
     """
     operators = ['>','<','!','=',',',')','(']
-    allowed = ['/','.']
+    allowed = ['/','.',':']
     tokens = []
     nextStr = ""
     
@@ -217,10 +217,26 @@ class MetaQuery( object ):
     return json.dumps( self.__metaQueryList )
   
   def prettyPrintMetaQuery(self):
-        
+    
+    def __comp(left,right):
+      lKeys = sorted(left.keys())
+      lLen = len(lKeys)
+      rKeys = sorted(right.keys())
+      rLen = len(rKeys)
+      for i in range(0,max([lLen,rLen])):
+        if lKeys[i] == rKeys[i]:
+          continue
+        else:
+          if lKeys[i] > rKeys[i]:
+            return 1
+          else:
+            return -1
+      # list are the same length and have the same elements
+      return 0
+      
     orFirst = True
     out = ""
-    sortedMQList = sorted( self.__metaQueryList, key=lambda k: k[sorted(k.keys())[0]] )
+    sortedMQList = sorted( self.__metaQueryList, cmp=__comp )
     for conj in sortedMQList:
       if not orFirst:
         out += "OR "
@@ -240,9 +256,9 @@ class MetaQuery( object ):
             out += "%s = '%s'" % (meta,mDict)
           else:
             out += "%s = %s " % (meta, str(mDict))
-        if '[' in out: 
+        # if '[' in out: 
           # translate '=' to 'in'
-          out = out.translate(TRANSLATETAB)
+          # out = out.translate(TRANSLATETAB)
     return out
 
   def applyQuery( self, userMetaDict ):
@@ -341,9 +357,6 @@ class MetaQuery( object ):
   #============================================Private Methods===============================================
   
   def __optimize(self, queryList):
-    """
-    Optimize the query, remove the duplicate elements
-    """
     mq = queryList
     toDel = []
     
@@ -351,88 +364,21 @@ class MetaQuery( object ):
     for i in range(0,len(mq)-1):
       for j in range(i+1,len(mq)):
         # check if mq[i] is superset of mq[j]
-        d = self.__overlaps(mq[i], mq[j])
-        if d == 1:
+        if all(item in mq[i].items() for item in mq[j].items()):
           toDel.append(i)
-        elif d == 2: 
+        # check if mq[j is superset of mq[i] (reverse order)
+        elif all(item in mq[j].items() for item in mq[i].items()):
           toDel.append(j)
-          
     
     # create a list of indexes of elements to delete from the metaQueryList
     toDel = list(set(toDel))
-    toDel.sort(reverse=True) 
+    toDel.sort(reverse=True)
     
     # delete
     for i in toDel:
       del mq[i]
       
     return mq
-  
-  def __overlaps(self, lDict, rDict):
-    """
-    Pick a weaker term to delete from disjunction
-    :return 1 if lDict is weaker than rDict, 2 if rDict is weaker than lDict, 0 otherwise
-    """
-    commonKeys = set(lDict.keys()).intersection(set(rDict.keys()))
-    # check if the two terms consider at least one common meta 
-    if not commonKeys:
-      return 0
-    lscore = 0
-    rscore = 0
-    
-    # for each meta
-    for key in lDict.keys():
-      lVal = lDict[key]
-      rVal = rDict[key]
-      
-      # check if both conditions are '=' 
-      if not isinstance(lVal, dict) and not isinstance(rVal, dict):
-        # if they are not the same, both sides are relevant
-        if lVal != rVal:
-          return 0
-        else: # values are the same
-          continue
-      
-      done = False
-      tried = False
-      while not done:
-        
-        if isinstance(lVal.values()[0], list):
-          tried = True
-          lVal ,rVal  = rVal ,lVal
-          lDict,rDict = rDict,lDict
-          continue
-        
-        # one of the conditions is '=' for a single value
-        if not isinstance(lVal, dict):
-          if dict.keys()[0] == '!=' and isinstance(dict.values()[0],list):
-            
-          rscore += 1
-          if not self.__valueIsInInterval(lDict, rDict):
-            lscore += 1
-        # similar situation 
-        if not isinstance(rVal, dict):
-          tried = True
-          lVal ,rVal  = rVal ,lVal
-          lDict,rDict = rDict,lDict
-          continue
-            
-        # now both are dicts
-        
-        #TODO: finish 
-        
-        if not tried:
-          lVal ,rVal  = rVal ,lVal
-          lDict,rDict = rDict,lDict
-        elif not done:
-          raise RuntimeError("Problem when optimizing. Conditions: " + str(lDict) + " and " + str(rDict) )
-        
-    # both conditions have =/= 0 score -> both are relevant
-    if lscore > 0 and rscore > 0: return 0
-    # only left has non-zero score -> right is weaker 
-    elif lscore > 0: return 2
-    # last situation
-    else: return 1
   
   def __valueIsInInterval(self,val,cond):
     # getting operand
